@@ -1,0 +1,4 @@
+{
+  "name": "Dataform Core",
+  "install": "./.cursor/install.sh"
+}
