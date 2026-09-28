@@ -5,7 +5,7 @@ import { TmpDirFixture } from "df/testing/fixtures";
 import {
   coreExecutionRequestFromPath,
   runMainInVm,
-  WorkflowSettingsTemplates
+  WorkflowSettingsTemplates,
 } from "df/testing/run_core";
 
 suite("sqlx special characters", ({ afterEach }) => {
@@ -33,7 +33,7 @@ post_operations {
   SELECT 3;
 }
 -- A single line comment.
-SELECT \${a}`
+SELECT \${a}`,
     );
 
     const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -84,7 +84,7 @@ from \`location\``;
     writeDefinitionFile(
       projectDir,
       "file.sqlx",
-      `config { type: "table" }` + sqlContents + `pre_operations { ${sqlContents} }`
+      `config { type: "table" }` + sqlContents + `pre_operations { ${sqlContents} }`,
     );
 
     const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -115,7 +115,7 @@ quotes
     writeDefinitionFile(
       projectDir,
       "file.sqlx",
-      `config { type: "table" }` + sqlContents + `post_operations { ${sqlContents} }`
+      `config { type: "table" }` + sqlContents + `post_operations { ${sqlContents} }`,
     );
 
     const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -123,5 +123,24 @@ quotes
     expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
     expect(result.compile.compiledGraph.tables[0].query.trim()).equals(sqlContents);
     expect(result.compile.compiledGraph.tables[0].postOps[0].trim()).equals(sqlContents);
+  });
+
+  test("backticks and dollar signs are escaped in sql comments", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    writeWorkflowSettingsFile(projectDir, WorkflowSettingsTemplates.bigquery);
+    const sqlContents = `-- Evaluated interpolation inside comment: \${1 + 1}
+-- Evaluated interpolation inside comment with backslashes: \\\${1+1}
+-- Comment with backticks \`
+-- Comment with backslash and backtick \\\`
+SELECT 1`;
+    writeDefinitionFile(
+      projectDir,
+      "file.sqlx",
+      `config { type: "table" }` + sqlContents + `pre_operations { ${sqlContents} }`,
+    );
+    const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
+    expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
+    expect(result.compile.compiledGraph.tables[0].query.trim()).equals(sqlContents);
+    expect(result.compile.compiledGraph.tables[0].preOps[0].trim()).equals(sqlContents);
   });
 });
