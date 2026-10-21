@@ -1,11 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as rimraf from "rimraf";
 
 import { IHookHandler } from "df/testing";
 
 // TmpDirFixture can be used to create unique temporary directories which will be cleaned up
 // at the end of a test run. Intended for use within bazel tests.
+// In a { parallel: true } suite, pass `after`, not `afterEach`: the cleanup deletes the directories
+// of all tests, including ones that are still running.
 export class TmpDirFixture {
   private static dirCounter = 0;
 
@@ -19,7 +20,7 @@ export class TmpDirFixture {
   public createNewTmpDir() {
     // TEST_TMPDIR is set by bazel.
     const tmpDirPath = path.resolve(
-      path.join(process.env.TEST_TMPDIR, `tmp_dir_${TmpDirFixture.dirCounter++}`)
+      path.join(process.env.TEST_TMPDIR, `tmp_dir_${TmpDirFixture.dirCounter++}`),
     );
     fs.mkdirSync(tmpDirPath);
     this.tmpDirPaths.add(tmpDirPath);
@@ -28,7 +29,7 @@ export class TmpDirFixture {
 
   private rmTmpDirs() {
     for (const tmpPath of this.tmpDirPaths) {
-      rimraf.sync(tmpPath);
+      fs.rmSync(tmpPath, { recursive: true, force: true });
     }
   }
 }

@@ -12,7 +12,7 @@ import {
   resolvableAsTarget,
   strictKeysOf,
   stringifyResolvable,
-  toResolvable
+  toResolvable,
 } from "df/core/utils";
 import { dataform } from "df/protos/ts";
 
@@ -38,7 +38,13 @@ export interface ITestConfig extends INamedConfig {
 }
 
 /** @hidden */
-const ITestConfigProperties = strictKeysOf<ITestConfig>()(["type", "dataset", "name", "filename", "tags"]);
+const ITestConfigProperties = strictKeysOf<ITestConfig>()([
+  "type",
+  "dataset",
+  "name",
+  "filename",
+  "tags",
+]);
 
 /**
  * Dataform test actions can be used to write unit tests for your generated SQL
@@ -80,7 +86,7 @@ export class Test extends ActionBuilder<dataform.Test> {
 
   /** @hidden We delay contextification until the final compile step, so hold these here for now. */
   public contextableInputs = new Map<string, Contextable<IActionContext, string>>();
-  private contextableQuery: Contextable<IActionContext, string>; 
+  private contextableQuery: Contextable<IActionContext, string>;
   private testTarget: dataform.ITarget;
 
   /**
@@ -104,7 +110,7 @@ export class Test extends ActionBuilder<dataform.Test> {
       (e: Error) => this.session.compileError(e),
       config,
       ITestConfigProperties,
-      "test config"
+      "test config",
     );
     if (config.name) {
       this.proto.name = config.name;
@@ -114,20 +120,22 @@ export class Test extends ActionBuilder<dataform.Test> {
       this.testTarget = dataform.Target.create(
         this.applySessionToTarget(
           resolvableAsTarget(
-            toResolvable(config.dataset)
-          ), 
-          this.session.projectConfig
-        )
+            toResolvable(config.dataset),
+            this.session.projectConfig?.defaultLakehouseConfig,
+          ),
+          this.session.projectConfig,
+        ),
       );
       const canonicalTestTarget = dataform.Target.create(
         this.applySessionToTarget(
           resolvableAsTarget(
-            toResolvable(config.dataset)
-          ), 
-          this.session.canonicalProjectConfig
-        )
+            toResolvable(config.dataset),
+            this.session.canonicalProjectConfig?.defaultLakehouseConfig,
+          ),
+          this.session.canonicalProjectConfig,
+        ),
       );
-      
+
       // Set the target as the test name, with the tested action database and schema.
       this.proto.target = overrideTargetWithNewName(this.testTarget, this.proto.name);
       this.proto.canonicalTarget = overrideTargetWithNewName(canonicalTestTarget, this.proto.name);
@@ -154,8 +162,13 @@ export class Test extends ActionBuilder<dataform.Test> {
    */
   public input(refName: string | string[], contextableQuery: Contextable<IActionContext, string>) {
     this.contextableInputs.set(
-      targetStringifier.stringify(resolvableAsTarget(toResolvable(refName))),
-      contextableQuery
+      targetStringifier.stringify(
+        resolvableAsTarget(
+          toResolvable(refName),
+          this.session.projectConfig?.defaultLakehouseConfig,
+        ),
+      ),
+      contextableQuery,
     );
     return this;
   }
@@ -192,7 +205,7 @@ export class Test extends ActionBuilder<dataform.Test> {
     if (!this.testTarget) {
       this.session.compileError(
         new Error("Tests must operate upon a specified dataset."),
-        this.proto.fileName
+        this.proto.fileName,
       );
       return this.proto;
     } else {
@@ -200,21 +213,24 @@ export class Test extends ActionBuilder<dataform.Test> {
       if (allResolved.length > 1) {
         this.session.compileError(
           new Error(ambiguousActionNameMsg(this.testTarget, allResolved)),
-          this.proto.fileName
+          this.proto.fileName,
         );
         return this.proto;
       }
       const dataset = allResolved.length > 0 ? allResolved[0] : undefined;
-      if (!(dataset && (dataset instanceof Table || dataset instanceof View || dataset instanceof IncrementalTable))) {
+      if (!(
+        dataset &&
+        (dataset instanceof Table || dataset instanceof View || dataset instanceof IncrementalTable)
+      )) {
         this.session.compileError(
           new Error(`Dataset ${stringifyResolvable(this.testTarget)} could not be found.`),
-          this.proto.fileName
+          this.proto.fileName,
         );
         return this.proto;
       } else if (dataset instanceof IncrementalTable) {
         this.session.compileError(
           new Error("Running tests on incremental datasets is not yet supported."),
-          this.proto.fileName
+          this.proto.fileName,
         );
         return this.proto;
       } else {
@@ -226,22 +242,16 @@ export class Test extends ActionBuilder<dataform.Test> {
 
     // Check if the test query and expected output query are non-empty.
     if (!this.proto.testQuery.trim()) {
-      this.session.compileError(
-        new Error("Test query is empty."),
-        this.proto.fileName
-      );
+      this.session.compileError(new Error("Test query is empty."), this.proto.fileName);
     }
     if (!this.proto.expectedOutputQuery.trim()) {
-      this.session.compileError(
-        new Error("Expected query is empty."),
-        this.proto.fileName
-      );
+      this.session.compileError(new Error("Expected query is empty."), this.proto.fileName);
     }
 
     return verifyObjectMatchesProto(
       dataform.Test,
       this.proto,
-      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM
+      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM,
     );
   }
 }
@@ -275,21 +285,24 @@ class RefReplacingContext implements ITableContext {
   }
 
   public resolve(ref: Resolvable | string[], ...rest: string[]) {
-    const target = resolvableAsTarget(toResolvable(ref, rest));
+    const target = resolvableAsTarget(
+      toResolvable(ref, rest),
+      this.testContext.test.session.projectConfig?.defaultLakehouseConfig,
+    );
     if (!this.testContext.test.contextableInputs.has(targetStringifier.stringify(target))) {
       this.testContext.test.session.compileError(
         new Error(
           `Input for dataset "${JSON.stringify(
-            target
+            target,
           )}" has not been provided. Provided inputs: ${Array.from(
-            this.testContext.test.contextableInputs.keys()
-          ).map(providedTarget => JSON.stringify(providedTarget))}`
-        )
+            this.testContext.test.contextableInputs.keys(),
+          ).map((providedTarget) => JSON.stringify(providedTarget))}`,
+        ),
       );
       return "";
     }
     return `(${this.testContext.apply(
-      this.testContext.test.contextableInputs.get(targetStringifier.stringify(target))
+      this.testContext.test.contextableInputs.get(targetStringifier.stringify(target)),
     )})`;
   }
 
@@ -362,6 +375,6 @@ function overrideTargetWithNewName(target: dataform.ITarget, testName: string): 
   return dataform.Target.create({
     database: target.database,
     schema: target.schema,
-    name: testName
+    name: testName,
   });
 }

@@ -8,21 +8,21 @@ import { suite, test } from "df/testing";
 const ACTION = dataform.ExecutionAction.create({
   target: { database: "proj", schema: "schema", name: "table" },
   type: "table",
-  tasks: [{ statement: "SELECT 1" }]
+  tasks: [{ statement: "SELECT 1" }],
 });
 
 const START_RESULT = dataform.ActionResult.create({
   status: dataform.ActionResult.ExecutionStatus.RUNNING,
-  timing: { startTimeMillis: Long.fromNumber(1_700_000_000_000) }
+  timing: { startTimeMillis: Long.fromNumber(1_700_000_000_000) },
 });
 
 const COMPLETE_RESULT = dataform.ActionResult.create({
   status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL,
   timing: {
     startTimeMillis: Long.fromNumber(1_700_000_000_000),
-    endTimeMillis: Long.fromNumber(1_700_000_010_000)
+    endTimeMillis: Long.fromNumber(1_700_000_010_000),
   },
-  tasks: [{ metadata: { bigquery: { jobId: "job-abc" } } }]
+  tasks: [{ metadata: { bigquery: { jobId: "job-abc" } } }],
 });
 
 suite("LineagePayloadBuilder", () => {
@@ -34,13 +34,13 @@ suite("LineagePayloadBuilder", () => {
       ACTION,
       dataform.ActionResult.create({ status: dataform.ActionResult.ExecutionStatus.FAILED }),
       "proj",
-      "us"
+      "us",
     );
     const cancelled = builder.build(
       ACTION,
       dataform.ActionResult.create({ status: dataform.ActionResult.ExecutionStatus.CANCELLED }),
       "proj",
-      "us"
+      "us",
     );
     expect(running.eventType).to.equal("START");
     expect(successful.eventType).to.equal("COMPLETE");
@@ -67,7 +67,7 @@ suite("LineagePayloadBuilder", () => {
     const builder = new LineagePayloadBuilder("/tmp/proj");
     const otherAction = dataform.ExecutionAction.create({
       target: { database: "proj", schema: "schema", name: "other" },
-      type: "table"
+      type: "table",
     });
     const first = builder.build(ACTION, START_RESULT, "proj", "us");
     const second = builder.build(otherAction, START_RESULT, "proj", "us");
@@ -96,7 +96,7 @@ suite("LineagePayloadBuilder", () => {
     expect(start.run.facets.externalQuery).to.equal(undefined);
     expect(complete.run.facets.externalQuery).to.deep.include({
       externalQueryId: "cred-proj.us.job-abc",
-      source: "bigquery"
+      source: "bigquery",
     });
   });
 
@@ -106,90 +106,93 @@ suite("LineagePayloadBuilder", () => {
     expect(complete.run.facets.externalQuery).to.equal(undefined);
   });
 
-  test("errorMessage run facet appears only on FAIL with non-empty task errorMessage", () => {
-    const builder = new LineagePayloadBuilder("/tmp/proj");
-    const failedWithMsg = builder.build(
-      ACTION,
-      dataform.ActionResult.create({
-        status: dataform.ActionResult.ExecutionStatus.FAILED,
-        tasks: [{ errorMessage: "boom" }, { errorMessage: "kaboom" }]
-      }),
-      "proj",
-      "us"
-    );
-    expect(failedWithMsg.run.facets.errorMessage).to.deep.include({
-      message: "boom; kaboom",
-      programmingLanguage: "typescript"
-    });
-    const failedWithoutMsg = builder.build(
-      ACTION,
-      dataform.ActionResult.create({
-        status: dataform.ActionResult.ExecutionStatus.FAILED
-      }),
-      "proj",
-      "us"
-    );
-    expect(failedWithoutMsg.run.facets.errorMessage).to.equal(undefined);
-  });
-
-  test("errorMessage aggregates non-empty task messages across multi-task action", () => {
-    const builder = new LineagePayloadBuilder("/tmp/proj");
-    const failed = builder.build(
-      ACTION,
-      dataform.ActionResult.create({
-        status: dataform.ActionResult.ExecutionStatus.FAILED,
-        tasks: [
-          { errorMessage: "pre_operations failed: table not found" },
-          { errorMessage: "" },
-          { errorMessage: "main statement failed: syntax error at line 3" }
-        ]
-      }),
-      "proj",
-      "us"
-    );
-    expect(failed.run.facets.errorMessage).to.deep.equal({
-      _schemaURL: "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json",
-      message:
-        "pre_operations failed: table not found; main statement failed: syntax error at line 3",
-      programmingLanguage: "typescript"
-    });
-  });
-
-  test("errorMessage facet omitted when every task has empty or undefined errorMessage", () => {
-    const builder = new LineagePayloadBuilder("/tmp/proj");
-    const failed = builder.build(
-      ACTION,
-      dataform.ActionResult.create({
-        status: dataform.ActionResult.ExecutionStatus.FAILED,
-        tasks: [{ errorMessage: "" }, {}, { errorMessage: "" }]
-      }),
-      "proj",
-      "us"
-    );
-    expect(failed.run.facets.errorMessage).to.equal(undefined);
-  });
-
-  test("sql job facet emits joined task statements", () => {
-    const multiTaskAction = dataform.ExecutionAction.create({
+  test("externalQuery uses the last non-assertion task job ID", () => {
+    const multiTaskTable = dataform.ExecutionAction.create({
       target: { database: "proj", schema: "schema", name: "table" },
       type: "table",
-      tasks: [{ statement: "CREATE TABLE t AS SELECT 1" }, { statement: "SELECT 2" }]
+      tasks: [
+        { type: "statement", statement: "CREATE SCHEMA IF NOT EXISTS ..." },
+        { type: "statement", statement: "CREATE OR REPLACE TABLE ..." },
+      ],
     });
     const builder = new LineagePayloadBuilder("/tmp/proj");
-    const payload = builder.build(multiTaskAction, START_RESULT, "proj", "us");
-    expect(payload.job.facets.sql).to.deep.include({
-      query: "CREATE TABLE t AS SELECT 1;\nSELECT 2"
-    });
+    const complete = builder.build(
+      multiTaskTable,
+      dataform.ActionResult.create({
+        status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL,
+        tasks: [
+          { metadata: { bigquery: { jobId: "job-schema" } } },
+          { metadata: { bigquery: { jobId: "job-ctas" } } },
+        ],
+      }),
+      "proj",
+      "us",
+      "cred-proj",
+    );
+    expect(complete.run.facets.externalQuery.externalQueryId).to.equal("cred-proj.us.job-ctas");
   });
 
-  test("sql job facet omitted when action has no statements", () => {
-    const emptyAction = dataform.ExecutionAction.create({
-      target: { database: "proj", schema: "schema", name: "table" },
-      type: "table"
+  test("externalQuery uses the CREATE VIEW job for assertions, not the check job", () => {
+    const assertion = dataform.ExecutionAction.create({
+      target: { database: "proj", schema: "assertions", name: "assert_a" },
+      type: "assertion",
+      tasks: [
+        {
+          type: "statement",
+          statement: "create or replace view `proj.assertions.assert_a` as ...",
+        },
+        {
+          type: "assertion",
+          statement: "select sum(1) as row_count from `proj.assertions.assert_a`",
+        },
+      ],
     });
     const builder = new LineagePayloadBuilder("/tmp/proj");
-    const payload = builder.build(emptyAction, START_RESULT, "proj", "us");
-    expect(payload.job.facets.sql).to.equal(undefined);
+    const tasks = [
+      { metadata: { bigquery: { jobId: "job-create-view" } } },
+      { metadata: { bigquery: { jobId: "job-check" } } },
+    ];
+    const complete = builder.build(
+      assertion,
+      dataform.ActionResult.create({
+        status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL,
+        tasks,
+      }),
+      "proj",
+      "us",
+      "cred-proj",
+    );
+    const failed = builder.build(
+      assertion,
+      dataform.ActionResult.create({
+        status: dataform.ActionResult.ExecutionStatus.FAILED,
+        tasks,
+      }),
+      "proj",
+      "us",
+      "cred-proj",
+    );
+    expect(complete.run.facets.externalQuery.externalQueryId).to.equal(
+      "cred-proj.us.job-create-view",
+    );
+    expect(failed.run.facets.externalQuery.externalQueryId).to.equal(
+      "cred-proj.us.job-create-view",
+    );
+  });
+
+  test("does not emit sql job facet or errorMessage run facet", () => {
+    const builder = new LineagePayloadBuilder("/tmp/proj");
+    const failed = builder.build(
+      ACTION,
+      dataform.ActionResult.create({
+        status: dataform.ActionResult.ExecutionStatus.FAILED,
+        tasks: [{ errorMessage: "boom" }],
+      }),
+      "proj",
+      "us",
+    );
+    expect(failed.job.facets.sql).to.equal(undefined);
+    expect(failed.run.facets.errorMessage).to.equal(undefined);
   });
 
   test("jobType job facet declares BigQuery Pipelines integration", () => {
@@ -198,7 +201,7 @@ suite("LineagePayloadBuilder", () => {
     expect(payload.job.facets.jobType).to.deep.include({
       integration: "BIGQUERY_PIPELINES",
       jobType: "ACTION",
-      processingType: "BATCH"
+      processingType: "BATCH",
     });
   });
 
@@ -206,10 +209,21 @@ suite("LineagePayloadBuilder", () => {
     const builder = new LineagePayloadBuilder("/tmp/proj");
     const payload = builder.build(ACTION, START_RESULT, "proj", "us");
     expect(payload.job.facets.gcp_bq_pipelines_job).to.deep.include({
-      actionType: "table",
-      actionName: "schema.table"
+      actionType: "TABLE",
+      actionName: "schema.table",
     });
     expect(payload.job.facets.gcp_bq_pipelines_job.dataformCoreVersion).to.be.a("string");
+  });
+
+  test("throws when called with an unsupported action type", () => {
+    const declaration = dataform.ExecutionAction.create({
+      target: { database: "proj", schema: "schema", name: "decl" },
+      type: "declaration",
+    });
+    const builder = new LineagePayloadBuilder("/tmp/proj");
+    expect(() => builder.build(declaration, START_RESULT, "proj", "us")).to.throw(
+      /Unsupported action type for lineage: declaration/,
+    );
   });
 
   test("inputs list mirrors action.dependencyTargets in bigquery namespace", () => {
@@ -218,14 +232,14 @@ suite("LineagePayloadBuilder", () => {
       type: "table",
       dependencyTargets: [
         { database: "p1", schema: "s1", name: "n1" },
-        { database: "p2", schema: "s2", name: "n2" }
-      ]
+        { database: "p2", schema: "s2", name: "n2" },
+      ],
     });
     const builder = new LineagePayloadBuilder("/tmp/proj");
     const payload = builder.build(actionWithDeps, START_RESULT, "proj", "us");
     expect(payload.inputs).to.deep.equal([
       { namespace: "bigquery", name: "p1.s1.n1" },
-      { namespace: "bigquery", name: "p2.s2.n2" }
+      { namespace: "bigquery", name: "p2.s2.n2" },
     ]);
   });
 });

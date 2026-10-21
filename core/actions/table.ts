@@ -5,24 +5,25 @@ import {
   ILegacyBigQueryOptions,
   ILegacyTableConfig,
   LegacyConfigConverter,
-  TableType
+  TableType,
 } from "df/core/actions";
 import { Assertion } from "df/core/actions/assertion";
 import { IncrementalTable } from "df/core/actions/incremental_table";
+import {
+  validateLakehouseBigQueryOptions,
+  validateLakehouseColumns,
+  validateLakehouseConfig,
+} from "df/core/actions/lakehouse";
 import { View } from "df/core/actions/view";
 import { ColumnDescriptors } from "df/core/column_descriptors";
-import {
-  Contextable,
-  ITableContext,
-  JitContextable,
-  Resolvable,
-} from "df/core/contextables";
+import { Contextable, ITableContext, JitContextable, Resolvable } from "df/core/contextables";
 import * as Path from "df/core/path";
 import { Session } from "df/core/session";
 import {
   actionConfigToCompiledGraphTarget,
   checkAssertionsForDependency,
   checkExcessProperties,
+  configTargetToCompiledGraphTarget,
   getConnectionForIcebergTable,
   getEffectiveBucketName,
   getEffectiveTableFolderRoot,
@@ -111,7 +112,7 @@ export class Table extends ActionBuilder<dataform.Table> {
     type: "table",
     enumType: dataform.TableType.TABLE,
     disabled: false,
-    tags: []
+    tags: [],
   });
 
   /** @hidden */
@@ -133,19 +134,33 @@ export class Table extends ActionBuilder<dataform.Table> {
     if (!unverifiedConfig) {
       return;
     }
+    const hasDatasetOrSchema = Boolean(unverifiedConfig.dataset || unverifiedConfig.schema);
     const config = this.verifyConfig(unverifiedConfig);
 
     if (!config.name) {
       config.name = Path.basename(config.filename);
     }
-    const target = actionConfigToCompiledGraphTarget(config);
-    this.proto.target = this.applySessionToTarget(target, session.projectConfig, config.filename, {
-      validateTarget: true
+    const fileName = configPath
+      ? resolveActionsConfigFilename(config.filename, configPath)
+      : config.filename;
+    this.isLakehouseTarget = validateLakehouseConfig(session, config, fileName, hasDatasetOrSchema);
+    const target = actionConfigToCompiledGraphTarget(
+      config,
+      session.projectConfig?.defaultLakehouseConfig,
+    );
+    this.proto.target = this.applySessionToTarget(target, session.projectConfig, fileName, {
+      validateTarget: true,
     });
-    this.proto.canonicalTarget = this.applySessionToTarget(target, session.canonicalProjectConfig);
+    this.proto.canonicalTarget = this.applySessionToTarget(
+      actionConfigToCompiledGraphTarget(
+        config,
+        session.canonicalProjectConfig?.defaultLakehouseConfig,
+      ),
+      session.canonicalProjectConfig,
+    );
 
     if (configPath) {
-      config.filename = resolveActionsConfigFilename(config.filename, configPath);
+      config.filename = fileName;
       this.query(nativeRequire(config.filename).query);
     }
     if (config.filename) {
@@ -156,7 +171,14 @@ export class Table extends ActionBuilder<dataform.Table> {
       this.setDependOnDependencyAssertions(config.dependOnDependencyAssertions);
     }
     if (config.dependencyTargets) {
-      this.dependencies(config.dependencyTargets);
+      this.dependencies(
+        config.dependencyTargets.map((dependencyTarget) =>
+          configTargetToCompiledGraphTarget(
+            dataform.ActionConfig.Target.create(dependencyTarget),
+            session.projectConfig?.defaultLakehouseConfig,
+          ),
+        ),
+      );
     }
     if (config.hermetic !== undefined) {
       this.hermetic(config.hermetic);
@@ -178,9 +200,9 @@ export class Table extends ActionBuilder<dataform.Table> {
     }
     if (config.columns?.length) {
       this.columns(
-        config.columns.map(columnDescriptor =>
-          dataform.ActionConfig.ColumnDescriptor.create(columnDescriptor)
-        )
+        config.columns.map((columnDescriptor) =>
+          dataform.ActionConfig.ColumnDescriptor.create(columnDescriptor),
+        ),
       );
     }
     if (config.assertions) {
@@ -199,20 +221,36 @@ export class Table extends ActionBuilder<dataform.Table> {
       partitionExpirationDays: config.partitionExpirationDays,
       requirePartitionFilter: config.requirePartitionFilter,
       additionalOptions: config.additionalOptions,
-      preserveGovernanceControls: config.preserveGovernanceControls ?? session.projectConfig.preserveGovernanceControls ?? false,
-      ...(config.iceberg ? {
-        connection: getConnectionForIcebergTable(
-          config.iceberg.connection,
-          session.projectConfig.defaultIcebergConfig?.connection
-        ),
-        fileFormat: getFileFormatValueForIcebergTable(config.iceberg.fileFormat?.toString()),
-        tableFormat: dataform.TableFormat.ICEBERG,
-        storageUri: getStorageUriForIcebergTable(
-          getEffectiveBucketName(session.projectConfig.defaultIcebergConfig?.bucketName, config.iceberg.bucketName),
-          getEffectiveTableFolderRoot(session.projectConfig.defaultIcebergConfig?.tableFolderRoot, config.iceberg.tableFolderRoot),
-          getEffectiveTableFolderSubpath(this.proto.target.schema, this.proto.target.name, session.projectConfig.defaultIcebergConfig?.tableFolderSubpath, config.iceberg.tableFolderSubpath),
-        ),
-      } : {}),
+      preserveGovernanceControls:
+        config.preserveGovernanceControls ??
+        session.projectConfig.preserveGovernanceControls ??
+        false,
+      ...(config.iceberg && !config.lakehouse
+        ? {
+            connection: getConnectionForIcebergTable(
+              config.iceberg.connection,
+              session.projectConfig.defaultIcebergConfig?.connection,
+            ),
+            fileFormat: getFileFormatValueForIcebergTable(config.iceberg.fileFormat?.toString()),
+            tableFormat: dataform.TableFormat.ICEBERG,
+            storageUri: getStorageUriForIcebergTable(
+              getEffectiveBucketName(
+                session.projectConfig.defaultIcebergConfig?.bucketName,
+                config.iceberg.bucketName,
+              ),
+              getEffectiveTableFolderRoot(
+                session.projectConfig.defaultIcebergConfig?.tableFolderRoot,
+                config.iceberg.tableFolderRoot,
+              ),
+              getEffectiveTableFolderSubpath(
+                this.proto.target.schema,
+                this.proto.target.name,
+                session.projectConfig.defaultIcebergConfig?.tableFolderSubpath,
+                config.iceberg.tableFolderSubpath,
+              ),
+            ),
+          }
+        : {}),
     });
 
     if (config.reservation) {
@@ -239,14 +277,14 @@ export class Table extends ActionBuilder<dataform.Table> {
         newAction = new IncrementalTable(
           this.session,
           { ...this.unverifiedConfig, type: "incremental" },
-          this.configPath
+          this.configPath,
         );
         break;
       case "view":
         newAction = new View(
           this.session,
           { ...this.unverifiedConfig, type: "view" },
-          this.configPath
+          this.configPath,
         );
         break;
       default:
@@ -255,7 +293,7 @@ export class Table extends ActionBuilder<dataform.Table> {
     const existingAction = this.session.actions.indexOf(this);
     if (existingAction === -1) {
       throw Error(
-        "Expected pre-existing action, but none found. Please report this to the Dataform team."
+        "Expected pre-existing action, but none found. Please report this to the Dataform team.",
       );
     }
     this.session.actions[existingAction] = newAction;
@@ -279,7 +317,8 @@ export class Table extends ActionBuilder<dataform.Table> {
     if (!this.proto.actionDescriptor) {
       this.proto.actionDescriptor = {};
     }
-    this.proto.actionDescriptor.compilationMode = dataform.ActionCompilationMode.ACTION_COMPILATION_MODE_JIT;
+    this.proto.actionDescriptor.compilationMode =
+      dataform.ActionCompilationMode.ACTION_COMPILATION_MODE_JIT;
     this.contextableJitCode = jitCode;
     return this;
   }
@@ -331,7 +370,7 @@ export class Table extends ActionBuilder<dataform.Table> {
    */
   public disabled(disabled = true) {
     this.proto.disabled = disabled;
-    this.uniqueKeyAssertions.forEach(assertion => assertion.disabled(disabled));
+    this.uniqueKeyAssertions.forEach((assertion) => assertion.disabled(disabled));
     this.rowConditionsAssertion?.disabled(disabled);
     return this;
   }
@@ -366,7 +405,7 @@ export class Table extends ActionBuilder<dataform.Table> {
    */
   public dependencies(value: Resolvable | Resolvable[]) {
     const newDependencies = Array.isArray(value) ? value : [value];
-    newDependencies.forEach(resolvable => {
+    newDependencies.forEach((resolvable) => {
       const dependencyTarget = checkAssertionsForDependency(this, resolvable);
       if (!!dependencyTarget) {
         this.proto.dependencyTargets.push(dependencyTarget);
@@ -397,10 +436,10 @@ export class Table extends ActionBuilder<dataform.Table> {
    */
   public tags(value: string | string[]) {
     const newTags = typeof value === "string" ? [value] : value;
-    newTags.forEach(t => {
+    newTags.forEach((t) => {
       this.proto.tags.push(t);
     });
-    this.uniqueKeyAssertions.forEach(assertion => assertion.tags(value));
+    this.uniqueKeyAssertions.forEach((assertion) => assertion.tags(value));
     this.rowConditionsAssertion?.tags(value);
     return this;
   }
@@ -429,9 +468,8 @@ export class Table extends ActionBuilder<dataform.Table> {
     if (!this.proto.actionDescriptor) {
       this.proto.actionDescriptor = {};
     }
-    this.proto.actionDescriptor.columns = ColumnDescriptors.mapConfigProtoToCompilationProto(
-      columns
-    );
+    this.proto.actionDescriptor.columns =
+      ColumnDescriptors.mapConfigProtoToCompilationProto(columns);
     return this;
   }
 
@@ -446,7 +484,7 @@ export class Table extends ActionBuilder<dataform.Table> {
       dataform.Target.create({ ...this.proto.target, database }),
       this.session.projectConfig,
       this.proto.fileName,
-      { validateTarget: true }
+      { validateTarget: true },
     );
     return this;
   }
@@ -458,11 +496,19 @@ export class Table extends ActionBuilder<dataform.Table> {
    * Sets the schema (BigQuery dataset) in which to create the output of this action.
    */
   public schema(schema: string) {
+    if (this.isLakehouseTarget) {
+      this.session.compileError(
+        new Error("Cannot specify both 'lakehouse' and 'dataset'/'schema' on the same action."),
+        this.proto.fileName,
+        this.proto.target,
+      );
+      return this;
+    }
     this.proto.target = this.applySessionToTarget(
       dataform.Target.create({ ...this.proto.target, schema }),
       this.session.projectConfig,
       this.proto.fileName,
-      { validateTarget: true }
+      { validateTarget: true },
     );
     return this;
   }
@@ -478,6 +524,14 @@ export class Table extends ActionBuilder<dataform.Table> {
    * needed -->
    */
   public assertions(tableAssertionsConfig: dataform.ActionConfig.TableAssertionsConfig): Table {
+    if (this.isLakehouseTarget) {
+      this.session.compileError(
+        new Error("Inline assertions are not supported for Lakehouse (4-part) targets"),
+        this.proto.fileName,
+        this.proto.target,
+      );
+      return this;
+    }
     const inlineAssertions = this.generateInlineAssertions(tableAssertionsConfig, this.proto);
     this.uniqueKeyAssertions = inlineAssertions.uniqueKeyAssertions;
     this.rowConditionsAssertion = inlineAssertions.rowConditionsAssertion;
@@ -522,10 +576,25 @@ export class Table extends ActionBuilder<dataform.Table> {
       validateStorageUriFormat(this.proto.bigquery.storageUri);
     }
 
+    if (this.isLakehouseTarget) {
+      validateLakehouseColumns(
+        this.session,
+        this.proto.actionDescriptor,
+        this.proto.fileName,
+        this.proto.target,
+      );
+      validateLakehouseBigQueryOptions(
+        this.session,
+        this.proto.bigquery,
+        this.proto.fileName,
+        this.proto.target,
+      );
+    }
+
     return verifyObjectMatchesProto(
       dataform.Table,
       this.proto,
-      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM
+      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM,
     );
   }
 
@@ -536,7 +605,7 @@ export class Table extends ActionBuilder<dataform.Table> {
       this.contextableQuery,
       this.contextableWhere,
       this.contextablePostOps,
-      this.contextablePreOps
+      this.contextablePreOps,
     );
 
     if (!this.proto.actionDescriptor) {
@@ -557,7 +626,7 @@ export class Table extends ActionBuilder<dataform.Table> {
       this.proto.incrementalPreOps = this.contextifyOps(this.contextablePreOps, incrementalContext);
       this.proto.incrementalPostOps = this.contextifyOps(
         this.contextablePostOps,
-        incrementalContext
+        incrementalContext,
       );
     }
 
@@ -566,10 +635,10 @@ export class Table extends ActionBuilder<dataform.Table> {
     }
 
     this.proto.preOps = this.contextifyOps(this.contextablePreOps, context).filter(
-      op => !!op.trim()
+      (op) => !!op.trim(),
     );
     this.proto.postOps = this.contextifyOps(this.contextablePostOps, context).filter(
-      op => !!op.trim()
+      (op) => !!op.trim(),
     );
 
     validateQueryString(this.session, this.proto.query, this.proto.fileName);
@@ -579,10 +648,10 @@ export class Table extends ActionBuilder<dataform.Table> {
   /** @hidden */
   private contextifyOps(
     contextableOps: Array<Contextable<ITableContext, string | string[]>>,
-    currentContext: TableContext
+    currentContext: TableContext,
   ) {
     let protoOps: string[] = [];
-    contextableOps.forEach(contextableOp => {
+    contextableOps.forEach((contextableOp) => {
       const appliedOps = currentContext.apply(contextableOp);
       protoOps = protoOps.concat(typeof appliedOps === "string" ? [appliedOps] : appliedOps);
     });
@@ -597,20 +666,20 @@ export class Table extends ActionBuilder<dataform.Table> {
   private verifyConfig(
     // `any` is used here to facilitate the type merging of the legacy table config, which is very
     // different to the new structure.
-    unverifiedConfig: dataform.ActionConfig.TableConfig | ILegacyTableConfig | any
+    unverifiedConfig: dataform.ActionConfig.TableConfig | ILegacyTableConfig | any,
   ): dataform.ActionConfig.TableConfig {
     // The "type" field only exists on legacy table configs. Here we convert them to the
     // new format.
     if (unverifiedConfig.type) {
       if (unverifiedConfig.type !== "table") {
         throw ReferenceError(
-          `Unexpected type for Table; want "table", got ${unverifiedConfig.type}`
+          `Unexpected type for Table; want "table", got ${unverifiedConfig.type}`,
         );
       }
       delete unverifiedConfig.type;
       if (unverifiedConfig.dependencies) {
         unverifiedConfig.dependencyTargets = unverifiedConfig.dependencies.map(
-          (dependency: string | object) => resolvableAsActionConfigTarget(dependency)
+          (dependency: string | object) => resolvableAsActionConfigTarget(dependency),
         );
         delete unverifiedConfig.dependencies;
       }
@@ -628,16 +697,14 @@ export class Table extends ActionBuilder<dataform.Table> {
       }
       if (unverifiedConfig.columns) {
         unverifiedConfig.columns = ColumnDescriptors.mapLegacyObjectToConfigProto(
-          unverifiedConfig.columns as any
+          unverifiedConfig.columns as any,
         );
       }
 
-      unverifiedConfig = LegacyConfigConverter.insertLegacyInlineAssertionsToConfigProto(
-        unverifiedConfig
-      );
-      unverifiedConfig = LegacyConfigConverter.insertLegacyBigQueryOptionsToConfigProto(
-        unverifiedConfig
-      );
+      unverifiedConfig =
+        LegacyConfigConverter.insertLegacyInlineAssertionsToConfigProto(unverifiedConfig);
+      unverifiedConfig =
+        LegacyConfigConverter.insertLegacyBigQueryOptionsToConfigProto(unverifiedConfig);
       if (unverifiedConfig.bigquery) {
         checkExcessProperties(
           (e: Error) => {
@@ -653,18 +720,18 @@ export class Table extends ActionBuilder<dataform.Table> {
             "requirePartitionFilter",
             "additionalOptions",
             "incrementalPredicates",
-            "iceberg"
+            "iceberg",
           ]),
-          "BigQuery table config"
+          "BigQuery table config",
         );
       }
       if (unverifiedConfig.iceberg) {
         if (
           unverifiedConfig.iceberg.fileFormat &&
-          unverifiedConfig.iceberg.fileFormat.toUpperCase() !== 'PARQUET'
+          unverifiedConfig.iceberg.fileFormat.toUpperCase() !== "PARQUET"
         ) {
           throw new ReferenceError(
-            `Unexpected file format; only "PARQUET" is allowed, got "${unverifiedConfig.iceberg.fileFormat}".`
+            `Unexpected file format; only "PARQUET" is allowed, got "${unverifiedConfig.iceberg.fileFormat}".`,
           );
         }
       }
@@ -673,18 +740,22 @@ export class Table extends ActionBuilder<dataform.Table> {
     const config = verifyObjectMatchesProto(
       dataform.ActionConfig.TableConfig,
       unverifiedConfig,
-      VerifyProtoErrorBehaviour.SHOW_DOCS_LINK
+      VerifyProtoErrorBehaviour.SHOW_DOCS_LINK,
     );
 
-    if (!config.partitionBy && (config.partitionExpirationDays || config.requirePartitionFilter)) {
+    if (
+      !config.lakehouse &&
+      !config.partitionBy &&
+      (config.partitionExpirationDays || config.requirePartitionFilter)
+    ) {
       this.session.compileError(
         `requirePartitionFilter/partitionExpirationDays are not valid for non partitioned BigQuery tables`,
         config.filename,
         dataform.Target.create({
           database: config.project,
           schema: config.dataset,
-          name: config.name
-        })
+          name: config.name,
+        }),
       );
     }
 
@@ -700,7 +771,10 @@ export class Table extends ActionBuilder<dataform.Table> {
  * @hidden
  */
 export class TableContext implements ITableContext {
-  constructor(private table: Table, private isIncremental = false) { }
+  constructor(
+    private table: Table,
+    private isIncremental = false,
+  ) {}
 
   public self(): string {
     return this.resolve(this.table.getTarget());
@@ -712,7 +786,7 @@ export class TableContext implements ITableContext {
 
   public ref(ref: Resolvable | string[], ...rest: string[]): string {
     ref = toResolvable(ref, rest);
-    if (!resolvableAsTarget(ref)) {
+    if (!resolvableAsTarget(ref, this.table.session.projectConfig?.defaultLakehouseConfig)) {
       this.table.session.compileError(new Error(`Action name is not specified`));
       return "";
     }
@@ -793,4 +867,3 @@ export class TableContext implements ITableContext {
     return "";
   }
 }
-

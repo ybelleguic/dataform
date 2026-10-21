@@ -6,8 +6,6 @@ bazel-*
 .vscode/
 .history/
 
-bazel-*
-
 **/.DS_Store
 
 **/*.orig
@@ -18,6 +16,6 @@ go.sum
 secret.json
 bigquery.json
 
-yarn-error.log
-
 tmp/
+
+tools/canary/config.local.env

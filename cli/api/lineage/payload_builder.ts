@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "crypto";
 import Long from "long";
 import * as path from "path";
 
+import { toLineageActionType } from "df/cli/api/lineage/action_type";
 import { version } from "df/core/version";
 import { dataform } from "df/protos/ts";
 
@@ -13,9 +14,6 @@ const PARENT_RUN_FACET_SCHEMA =
   "https://openlineage.io/spec/facets/1-2-0/ParentRunFacet.json#/$defs/ParentRunFacet";
 const EXTERNAL_QUERY_FACET_SCHEMA =
   "https://openlineage.io/spec/facets/1-0-2/ExternalQueryRunFacet.json";
-const ERROR_MESSAGE_FACET_SCHEMA =
-  "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json";
-const SQL_JOB_FACET_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/SQLJobFacet.json";
 const GCP_LINEAGE_JOB_FACET_SCHEMA =
   "https://openlineage.io/spec/facets/1-0-0/GcpLineageJobFacet.json#/$defs/GcpLineageJobFacet";
 const JOB_TYPE_FACET_SCHEMA =
@@ -49,8 +47,13 @@ export class LineagePayloadBuilder {
     actionResult: dataform.IActionResult,
     projectId: string,
     location: string,
-    credentialsProjectId?: string
+    credentialsProjectId?: string,
   ): { [key: string]: any } {
+    const actionType = toLineageActionType(action);
+    if (!actionType) {
+      throw new Error(`Unsupported action type for lineage: ${action.type}`);
+    }
+
     if (!this.workdirHash && this.projectDir) {
       this.workdirHash = createHash("sha256").update(this.projectDir).digest("hex").slice(0, 16);
     }
@@ -77,16 +80,16 @@ export class LineagePayloadBuilder {
       }
     }
 
-    const inputs = (action.dependencyTargets || []).map(dep => ({
+    const inputs = (action.dependencyTargets || []).map((dep) => ({
       namespace: "bigquery",
-      name: `${dep.database || projectId}.${dep.schema}.${dep.name}`
+      name: `${dep.database || projectId}.${dep.schema}.${dep.name}`,
     }));
 
     const outputs = [
       {
         namespace: "bigquery",
-        name: `${action.target.database || projectId}.${action.target.schema}.${action.target.name}`
-      }
+        name: `${action.target.database || projectId}.${action.target.schema}.${action.target.name}`,
+      },
     ];
 
     const workdirIdentifier = this.buildWorkdirIdentifier();
@@ -97,12 +100,12 @@ export class LineagePayloadBuilder {
     const nominalTime: any = {
       _schemaURL: NOMINAL_TIME_FACET_SCHEMA,
       nominalStartTime: new Date(
-        toMillis(actionResult.timing?.startTimeMillis) ?? Date.now()
-      ).toISOString()
+        toMillis(actionResult.timing?.startTimeMillis) ?? Date.now(),
+      ).toISOString(),
     };
     if (actionResult.timing?.endTimeMillis) {
       nominalTime.nominalEndTime = new Date(
-        toMillis(actionResult.timing.endTimeMillis)
+        toMillis(actionResult.timing.endTimeMillis),
       ).toISOString();
     }
 
@@ -113,78 +116,51 @@ export class LineagePayloadBuilder {
         _schemaURL: PARENT_RUN_FACET_SCHEMA,
         job: {
           namespace: "dataform",
-          name: parentJobName
+          name: parentJobName,
         },
         run: {
-          runId: this.parentRunId
-        }
+          runId: this.parentRunId,
+        },
       },
       gcp_bq_pipelines_run: {
-        runType: "cli-manual"
-      }
+        runType: "cli-manual",
+      },
     };
 
     if (eventType !== "START") {
-      const bqJobId = extractBqJobId(actionResult);
+      const bqJobId = extractTargetWritingBqJobId(action, actionResult);
       if (bqJobId && credentialsProjectId) {
         runFacets.externalQuery = {
           _producer: PRODUCER_URL,
           _schemaURL: EXTERNAL_QUERY_FACET_SCHEMA,
           externalQueryId: `${credentialsProjectId}.${location}.${bqJobId}`,
-          source: "bigquery"
+          source: "bigquery",
         };
       }
     }
 
-    if (eventType === "FAIL") {
-      const errorMessages = actionResult.tasks
-        ?.map(t => t.errorMessage)
-        .filter(msg => !!msg)
-        .join("; ");
-      if (errorMessages) {
-        runFacets.errorMessage = {
-          _schemaURL: ERROR_MESSAGE_FACET_SCHEMA,
-          message: errorMessages,
-          programmingLanguage: "typescript"
-        };
-      }
-    }
-
-    const sqlStatements = action.tasks
-      ?.map(task => task.statement)
-      .filter(stmt => !!stmt)
-      .join(";\n");
-
-    const jobFacets: any = {};
-    if (sqlStatements) {
-      jobFacets.sql = {
-        _schemaURL: SQL_JOB_FACET_SCHEMA,
-        query: sqlStatements
-      };
-    }
-
-    jobFacets.gcp_lineage = {
-      _producer: PRODUCER_URL,
-      _schemaURL: GCP_LINEAGE_JOB_FACET_SCHEMA,
-      displayName: `BigQuery Pipelines action ${canonicalActionTarget}`,
-      origin: {
-        name: `projects/${projectId}/locations/${location}/cli/${workdirIdentifier}`,
-        sourceType: "BIGQUERY_PIPELINES"
-      }
-    };
-
-    jobFacets.jobType = {
-      _producer: PRODUCER_URL,
-      _schemaURL: JOB_TYPE_FACET_SCHEMA,
-      integration: "BIGQUERY_PIPELINES",
-      jobType: "ACTION",
-      processingType: "BATCH"
-    };
-
-    jobFacets.gcp_bq_pipelines_job = {
-      dataformCoreVersion: version,
-      actionType: action.type,
-      actionName: canonicalActionTarget
+    const jobFacets: any = {
+      gcp_lineage: {
+        _producer: PRODUCER_URL,
+        _schemaURL: GCP_LINEAGE_JOB_FACET_SCHEMA,
+        displayName: `BigQuery Pipelines action ${canonicalActionTarget}`,
+        origin: {
+          name: `projects/${projectId}/locations/${location}/cli/${workdirIdentifier}`,
+          sourceType: "BIGQUERY_PIPELINES",
+        },
+      },
+      jobType: {
+        _producer: PRODUCER_URL,
+        _schemaURL: JOB_TYPE_FACET_SCHEMA,
+        integration: "BIGQUERY_PIPELINES",
+        jobType: "ACTION",
+        processingType: "BATCH",
+      },
+      gcp_bq_pipelines_job: {
+        dataformCoreVersion: version,
+        actionType,
+        actionName: canonicalActionTarget,
+      },
     };
 
     return {
@@ -192,17 +168,17 @@ export class LineagePayloadBuilder {
       eventTime,
       run: {
         runId,
-        facets: runFacets
+        facets: runFacets,
       },
       job: {
         namespace: "dataform",
         name: jobName,
-        facets: jobFacets
+        facets: jobFacets,
       },
       inputs,
       outputs,
       producer: PRODUCER_URL,
-      schemaURL: RUN_EVENT_SCHEMA
+      schemaURL: RUN_EVENT_SCHEMA,
     };
   }
 
@@ -231,11 +207,29 @@ function toMillis(val: Long | number | undefined | null): number | undefined {
   return undefined;
 }
 
-function extractBqJobId(actionResult: dataform.IActionResult): string | undefined {
+/**
+ * Returns the ID of the BigQuery job that wrote the action's target: the last
+ * executed non-assertion task with a job ID. Assertions run a `CREATE VIEW`
+ * task followed by a check query that only reads the view, so the check job
+ * carries no lineage for the assertion's dependencies. For tables,
+ * `ExecutionSql.publishTasks` concatenates `pre_operations`, the main DDL/DML
+ * statement and `post_operations` into a single task.
+ *
+ * `Runner.executeAction` in `cli/api/commands/run.ts` pushes one `ITaskResult`
+ * per `action.tasks` entry in order, so `actionResult.tasks` is index-aligned
+ * with `action.tasks`.
+ */
+function extractTargetWritingBqJobId(
+  action: dataform.IExecutionAction,
+  actionResult: dataform.IActionResult,
+): string | undefined {
   if (!actionResult.tasks) {
     return undefined;
   }
   for (let i = actionResult.tasks.length - 1; i >= 0; i--) {
+    if (action.tasks?.[i]?.type === "assertion") {
+      continue;
+    }
     const jobId = actionResult.tasks[i]?.metadata?.bigquery?.jobId;
     if (jobId) {
       return jobId;

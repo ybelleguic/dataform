@@ -40,6 +40,7 @@ export type ActionProto =
 export abstract class ActionBuilder<T> {
   public session: Session;
   public includeAssertionsForDependency: Map<string, boolean> = new Map();
+  protected isLakehouseTarget = false;
 
   constructor(session?: Session) {
     this.session = session;
@@ -52,7 +53,7 @@ export abstract class ActionBuilder<T> {
     options?: {
       validateTarget?: boolean;
       useDefaultAssertionDataset?: boolean;
-    }
+    },
   ): dataform.Target {
     const defaultSchema = options?.useDefaultAssertionDataset
       ? projectConfig.assertionSchema || projectConfig.defaultSchema
@@ -60,7 +61,7 @@ export abstract class ActionBuilder<T> {
     const target = dataform.Target.create({
       name: targetFromConfig.name,
       schema: targetFromConfig.schema || defaultSchema || undefined,
-      database: targetFromConfig.database || projectConfig.defaultDatabase || undefined
+      database: targetFromConfig.database || projectConfig.defaultDatabase || undefined,
     });
     if (options?.validateTarget) {
       this.validateTarget(targetFromConfig, fileName);
@@ -76,7 +77,7 @@ export abstract class ActionBuilder<T> {
         : undefined,
       database: targetFromConfig.database
         ? this.session.finalizeDatabase(targetFromConfig.database)
-        : undefined
+        : undefined,
     });
   }
 
@@ -91,7 +92,7 @@ export abstract class ActionBuilder<T> {
 
   protected generateInlineAssertions(
     tableAssertionsConfig: dataform.ActionConfig.TableAssertionsConfig,
-    proto: dataform.Table
+    proto: dataform.Table,
   ): { uniqueKeyAssertions: Assertion[]; rowConditionsAssertion?: Assertion } {
     const inlineAssertions: {
       uniqueKeyAssertions: Assertion[];
@@ -99,18 +100,20 @@ export abstract class ActionBuilder<T> {
     } = { uniqueKeyAssertions: [] };
     if (!!tableAssertionsConfig.uniqueKey?.length && !!tableAssertionsConfig.uniqueKeys?.length) {
       this.session.compileError(
-        new Error("Specify at most one of 'assertions.uniqueKey' and 'assertions.uniqueKeys'.")
+        new Error("Specify at most one of 'assertions.uniqueKey' and 'assertions.uniqueKeys'."),
       );
     }
-    const assertionPrefix = !!this.session.projectConfig.builtinAssertionNamePrefix ? `${this.session.projectConfig.builtinAssertionNamePrefix}_` : "";
-    let uniqueKeys = tableAssertionsConfig.uniqueKeys.map(uniqueKey =>
-      dataform.ActionConfig.TableAssertionsConfig.UniqueKey.create(uniqueKey)
+    const assertionPrefix = !!this.session.projectConfig.builtinAssertionNamePrefix
+      ? `${this.session.projectConfig.builtinAssertionNamePrefix}_`
+      : "";
+    let uniqueKeys = tableAssertionsConfig.uniqueKeys.map((uniqueKey) =>
+      dataform.ActionConfig.TableAssertionsConfig.UniqueKey.create(uniqueKey),
     );
     if (!!tableAssertionsConfig.uniqueKey?.length) {
       uniqueKeys = [
         dataform.ActionConfig.TableAssertionsConfig.UniqueKey.create({
-          uniqueKey: tableAssertionsConfig.uniqueKey
-        })
+          uniqueKey: tableAssertionsConfig.uniqueKey,
+        }),
       ];
     }
     if (uniqueKeys) {
@@ -118,10 +121,10 @@ export abstract class ActionBuilder<T> {
         const uniqueKeyAssertion = this.session
           .assert(
             `${assertionPrefix}${proto.target.schema}_${proto.target.name}_assertions_uniqueKey_${index}`,
-            dataform.ActionConfig.AssertionConfig.create({ filename: proto.fileName })
+            dataform.ActionConfig.AssertionConfig.create({ filename: proto.fileName }),
           )
-          .query(ctx =>
-            this.session.compilationSql().indexAssertion(ctx.ref(proto.target), uniqueKey)
+          .query((ctx) =>
+            this.session.compilationSql().indexAssertion(ctx.ref(proto.target), uniqueKey),
           );
         if (proto.tags) {
           uniqueKeyAssertion.tags(proto.tags);
@@ -139,17 +142,20 @@ export abstract class ActionBuilder<T> {
         typeof tableAssertionsConfig.nonNull === "string"
           ? [tableAssertionsConfig.nonNull]
           : tableAssertionsConfig.nonNull;
-      nonNullCols.forEach(nonNullCol => mergedRowConditions.push(`${nonNullCol} IS NOT NULL`));
+      nonNullCols.forEach((nonNullCol) => mergedRowConditions.push(`${nonNullCol} IS NOT NULL`));
     }
     if (!!mergedRowConditions && mergedRowConditions.length > 0) {
       inlineAssertions.rowConditionsAssertion = this.session
-        .assert(`${assertionPrefix}${proto.target.schema}_${proto.target.name}_assertions_rowConditions`, {
-          filename: proto.fileName
-        } as dataform.ActionConfig.AssertionConfig)
-        .query(ctx =>
+        .assert(
+          `${assertionPrefix}${proto.target.schema}_${proto.target.name}_assertions_rowConditions`,
+          {
+            filename: proto.fileName,
+          } as dataform.ActionConfig.AssertionConfig,
+        )
+        .query((ctx) =>
           this.session
             .compilationSql()
-            .rowConditionsAssertion(ctx.ref(proto.target), mergedRowConditions)
+            .rowConditionsAssertion(ctx.ref(proto.target), mergedRowConditions),
         );
       inlineAssertions.rowConditionsAssertion.setParentAction(dataform.Target.create(proto.target));
       if (proto.disabled) {
@@ -167,21 +173,21 @@ export abstract class ActionBuilder<T> {
       this.session.compileError(
         new Error("Action target names cannot include '.'"),
         fileName,
-        target
+        target,
       );
     }
-    if (target.schema.includes(".")) {
+    if (!this.isLakehouseTarget && target.schema.includes(".")) {
       this.session.compileError(
         new Error("Action target datasets cannot include '.'"),
         fileName,
-        target
+        target,
       );
     }
     if (target.database.includes(".")) {
       this.session.compileError(
         new Error("Action target projects cannot include '.'"),
         fileName,
-        target
+        target,
       );
     }
   }
@@ -189,18 +195,18 @@ export abstract class ActionBuilder<T> {
 
 export function checkConfigAdditionalOptionsOverlap(
   config: dataform.ActionConfig.TableConfig | dataform.ActionConfig.IncrementalTableConfig,
-  session: Session
+  session: Session,
 ) {
   const target = dataform.Target.create({
     database: config.project,
     schema: config.dataset,
-    name: config.name
+    name: config.name,
   });
   if (config.partitionExpirationDays && config.additionalOptions.partition_expiration_days) {
     session.compileError(
       `partitionExpirationDays has been declared twice`,
       config.filename,
-      target
+      target,
     );
   }
   if (config.requirePartitionFilter && config.additionalOptions.require_partition_filter) {
@@ -322,7 +328,7 @@ export interface IDocumentableConfig {
  * This is no longer needed other than for legacy backwards compatibility purposes, as tables are
  * now configured in separate actions.
  */
-export type TableType = typeof TableType[number];
+export type TableType = (typeof TableType)[number];
 
 /**
  * @hidden
@@ -339,17 +345,14 @@ export const TableType = ["table", "view", "incremental"] as const;
  * consider breaking backwards compatability of this in v4.
  */
 export interface ILegacyTableConfig
-  extends IActionConfig,
-    IDependenciesConfig,
-    IDocumentableConfig,
-    INamedConfig,
-    ITargetableConfig {
+  extends IActionConfig, IDependenciesConfig, IDocumentableConfig, INamedConfig, ITargetableConfig {
   type?: TableType;
   protected?: boolean;
   bigquery?: ILegacyBigQueryOptions;
   assertions?: ILegacyTableAssertions;
   uniqueKey?: string[];
   materialized?: boolean;
+  lakehouse?: dataform.ActionConfig.ILakehouseConfig;
 }
 
 /**
@@ -373,7 +376,7 @@ export interface ILegacyBigQueryOptions {
     bucketName?: string;
     tableFolderRoot?: string;
     tableFolderSubpath?: string;
-  }
+  };
   incrementalPredicates?: string[];
 }
 
@@ -394,7 +397,7 @@ export class LegacyConfigConverter {
   // This is a workaround to make bigquery options output empty fields with the same behaviour as
   // they did previously.
   public static legacyConvertBigQueryOptions(
-    bigquery: dataform.IBigQueryOptions
+    bigquery: dataform.IBigQueryOptions,
   ): dataform.IBigQueryOptions {
     let bigqueryFiltered: dataform.IBigQueryOptions = {};
     Object.entries(bigquery).forEach(([key, value]) => {
@@ -406,7 +409,7 @@ export class LegacyConfigConverter {
       if (value) {
         bigqueryFiltered = {
           ...bigqueryFiltered,
-          [key]: value
+          [key]: value,
         };
       }
     });
@@ -414,7 +417,7 @@ export class LegacyConfigConverter {
   }
 
   public static insertLegacyInlineAssertionsToConfigProto<T extends ILegacyTableConfig>(
-    unverifiedConfig: T
+    unverifiedConfig: T,
   ): T {
     // Type `any` is used here to facilitate the type hacking for legacy compatibility.
     const legacyConfig: any = unverifiedConfig;
@@ -426,9 +429,9 @@ export class LegacyConfigConverter {
       }
       // This determines if the uniqueKeys is of the legacy type.
       if (legacyConfig.assertions.uniqueKeys?.[0]?.length > 0) {
-        legacyConfig.assertions.uniqueKeys = (legacyConfig.assertions
-          .uniqueKeys as string[][]).map(uniqueKey =>
-          dataform.ActionConfig.TableAssertionsConfig.UniqueKey.create({ uniqueKey })
+        legacyConfig.assertions.uniqueKeys = (legacyConfig.assertions.uniqueKeys as string[][]).map(
+          (uniqueKey) =>
+            dataform.ActionConfig.TableAssertionsConfig.UniqueKey.create({ uniqueKey }),
         );
       }
       if (typeof legacyConfig.assertions.nonNull === "string") {
@@ -439,7 +442,7 @@ export class LegacyConfigConverter {
   }
 
   public static insertLegacyBigQueryOptionsToConfigProto<T extends ILegacyTableConfig>(
-    unverifiedConfig: T
+    unverifiedConfig: T,
   ): T {
     // Type `any` is used here to facilitate the type hacking for legacy compatibility.
     const legacyConfig: any = unverifiedConfig;
@@ -476,7 +479,7 @@ export class LegacyConfigConverter {
       legacyConfig.additionalOptions = legacyConfig.bigquery.additionalOptions;
       delete legacyConfig.bigquery.additionalOptions;
     }
-    if(!!legacyConfig.bigquery.iceberg) {
+    if (!!legacyConfig.bigquery.iceberg) {
       legacyConfig.iceberg = legacyConfig.bigquery.iceberg;
       delete legacyConfig.bigquery.iceberg;
     }

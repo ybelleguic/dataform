@@ -26,23 +26,9 @@ export function isForeignBuffer(candidate: any): boolean {
 
 /**
  * Makes protobufjs encode into plain `Uint8Array`s rather than `Buffer`s when `bufferClass` does
- * not belong to this realm.
- *
- * protobufjs decides once, at load time, whether to encode into a Node `Buffer` or a plain
- * `Uint8Array`, by looking at `global.Buffer`. Since protobufjs 7.6.0 that lookup reads the global
- * directly rather than going through `require("buffer")`, which changes the answer inside the vm2
- * sandbox that the CLI runs Dataform Core in: `require("buffer")` is blocked there, but
- * `global.Buffer` resolves to the *host* class, reachable through vm2's membrane.
- *
- * Encoding through that membrane is pathologically slow. Every `Buffer.allocUnsafe`,
- * `Buffer.byteLength` and `buf.utf8Write` call crosses the sandbox boundary, and the buffer that
- * comes back is a proxy whose elements are then read one bridged access at a time. Encoding a
- * graph with ~39k documented columns took ~2.9s that way, against ~80ms when staying inside the
- * sandbox.
- *
- * A `Uint8Array` allocated inside the sandbox never crosses the boundary at all. The encoded bytes
- * are identical either way; only the container type differs. Outside a sandbox this is a no-op, so
- * the host keeps protobufjs's native `Buffer` fast paths.
+ * not belong to this realm. Encoding through a `Buffer` from another realm is very slow, and the
+ * encoded bytes are the same either way. When `Buffer` belongs to this realm this is a no-op, so
+ * protobufjs keeps its native `Buffer` fast paths.
  *
  * See https://github.com/dataform-co/dataform/issues/2298.
  *
@@ -70,7 +56,7 @@ export interface IProtoClass<IProto, Proto> {
   toObject(proto: Proto): { [k: string]: any };
   fromObject(obj: { [k: string]: any }): Proto;
 
-  verify(obj: any): (string | null);
+  verify(obj: any): string | null;
 
   getTypeUrl(prefix: string): string;
 }
@@ -78,7 +64,7 @@ export interface IProtoClass<IProto, Proto> {
 export enum VerifyProtoErrorBehaviour {
   DEFAULT,
   SUGGEST_REPORTING_TO_DATAFORM_TEAM,
-  SHOW_DOCS_LINK
+  SHOW_DOCS_LINK,
 }
 
 const Struct = google.protobuf.Struct;
@@ -94,7 +80,7 @@ Struct.verify = function (object: any) {
     for (const [k, v] of Object.entries(object)) {
       fields[k] = unknownToValueShallow(v);
     }
-    Object.keys(object).forEach(key => delete object[key]);
+    Object.keys(object).forEach((key) => delete object[key]);
     object.fields = fields;
   }
   return originalVerify.call(this, object);
@@ -106,7 +92,7 @@ Struct.fromObject = function (object: any) {
     for (const [k, v] of Object.entries(object)) {
       fields[k] = unknownToValueShallow(v);
     }
-    Object.keys(object).forEach(key => delete object[key]);
+    Object.keys(object).forEach((key) => delete object[key]);
     object.fields = fields;
   }
   return originalFromObject.call(this, object);
@@ -123,7 +109,7 @@ Struct.fromObject = function (object: any) {
 export function verifyObjectMatchesProto<Proto>(
   protoType: IProtoClass<any, Proto>,
   object: object,
-  errorBehaviour: VerifyProtoErrorBehaviour = VerifyProtoErrorBehaviour.DEFAULT
+  errorBehaviour: VerifyProtoErrorBehaviour = VerifyProtoErrorBehaviour.DEFAULT,
 ): Proto {
   if (Array.isArray(object)) {
     throw ReferenceError(`Expected a top-level object, but found an array`);
@@ -151,7 +137,7 @@ export function verifyObjectMatchesProto<Proto>(
         if (!presentValue) {
           throw ReferenceError(
             `Unexpected empty value for "${presentKey}".` +
-            maybeGetDocsLinkPrefix(errorBehaviour, protoType)
+              maybeGetDocsLinkPrefix(errorBehaviour, protoType),
           );
         }
         if (typeof presentValue === "object" && Object.keys(presentValue).length === 0) {
@@ -163,13 +149,13 @@ export function verifyObjectMatchesProto<Proto>(
             `Unexpected property "${presentKey}" for "${protoType
               .getTypeUrl("")
               .replace("/", "")}", please report this to the Dataform team at ` +
-            `${REPORT_ISSUE_URL}.`
+              `${REPORT_ISSUE_URL}.`,
           );
         }
         throw ReferenceError(
           `Unexpected property "${presentKey}", or property value type of ` +
-          `"${typeof presentValue}" is incorrect.` +
-          maybeGetDocsLinkPrefix(errorBehaviour, protoType)
+            `"${typeof presentValue}" is incorrect.` +
+            maybeGetDocsLinkPrefix(errorBehaviour, protoType),
         );
       }
       if (typeof presentValue === "object") {
@@ -184,7 +170,7 @@ export function verifyObjectMatchesProto<Proto>(
 
 function maybeGetDocsLinkPrefix<Proto>(
   errorBehaviour: VerifyProtoErrorBehaviour,
-  protoType: IProtoClass<any, Proto>
+  protoType: IProtoClass<any, Proto>,
 ) {
   return errorBehaviour === VerifyProtoErrorBehaviour.SHOW_DOCS_LINK
     ? ` See ${CONFIGS_PROTO_DOCUMENTATION_URL}#${protoType
@@ -197,7 +183,7 @@ function maybeGetDocsLinkPrefix<Proto>(
 
 export function encode64<IProto, Proto>(
   protoType: IProtoClass<IProto, Proto>,
-  value: IProto | Proto = {} as IProto
+  value: IProto | Proto = {} as IProto,
 ): string {
   return toBase64(protoType.encode(protoType.create(value)).finish());
 }
@@ -212,14 +198,14 @@ export function decode64<Proto>(protoType: IProtoClass<any, Proto>, encodedValue
 export function equals<IProto, Proto>(
   protoType: IProtoClass<IProto, Proto>,
   valueA: IProto | Proto,
-  valueB: IProto | Proto
+  valueB: IProto | Proto,
 ): boolean {
   return encode64(protoType, valueA) === encode64(protoType, valueB);
 }
 
 export function deepClone<IProto, Proto>(
   protoType: IProtoClass<IProto, Proto>,
-  value: IProto | Proto
+  value: IProto | Proto,
 ) {
   return protoType.fromObject(protoType.toObject(protoType.create(value)));
 }
@@ -276,9 +262,9 @@ export function unknownToValue(raw: unknown): google.protobuf.IValue {
     return {
       structValue: {
         fields: Object.fromEntries(
-          Object.entries(raw).map(([key, value]) => [key, unknownToValue(value)])
-        )
-      }
+          Object.entries(raw).map(([key, value]) => [key, unknownToValue(value)]),
+        ),
+      },
     };
   }
   throw new Error(`Unsupported value: ${raw}`);

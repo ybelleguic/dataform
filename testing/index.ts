@@ -1,7 +1,6 @@
 import { ChildProcess } from "child_process";
 import * as fs from "fs-extra";
 import { dump as dumpYaml } from "js-yaml";
-import * as os from "os";
 import * as path from "path";
 
 import { dataform } from "df/protos/ts";
@@ -11,35 +10,18 @@ export * from "df/testing/suite";
 export * from "df/testing/test";
 export * from "df/testing/runner";
 
-export const platformPath = () => {
-  if (os.platform() === "darwin") {
-    if (os.arch() === "arm64") {
-      return "nodejs_darwin_arm64";
-    } else {
-      return "nodejs_darwin_amd64";
-    }
-  } else {
-    if (os.arch() === "arm64") {
-      return "nodejs_linux_arm64";
-    } else {
-      return "nodejs_linux_amd64";
-    }
-  }
-};
-
-// Note: it would be more correct for these to be injected by blaze at run time.
-export const nodePath = `external/${platformPath()}/bin/node`;
-export const npmPath = `external/${platformPath()}/bin/npm`;
-export const corePackageTarPath = "packages/@dataform/core/package.tar.gz";
+export const nodePath = path.resolve(process.env.JS_BINARY__NODE_BINARY || process.execPath);
+export const npmPath = process.env.JS_BINARY__NPM_BINARY || "npm";
+export const corePackageTarPath = path.resolve("packages/@dataform/core/package.tar.gz");
 
 export async function getProcessResult(childProcess: ChildProcess) {
   let stderr = "";
   childProcess.stderr.pipe(process.stderr);
-  childProcess.stderr.on("data", chunk => (stderr += String(chunk)));
+  childProcess.stderr.on("data", (chunk) => (stderr += String(chunk)));
   let stdout = "";
   childProcess.stdout.pipe(process.stdout);
-  childProcess.stdout.on("data", chunk => (stdout += String(chunk)));
-  const exitCode: number = await new Promise(resolve => {
+  childProcess.stdout.on("data", (chunk) => (stdout += String(chunk)));
+  const exitCode: number = await new Promise((resolve) => {
     childProcess.on("close", resolve);
   });
   return { exitCode, stdout, stderr };
@@ -74,7 +56,7 @@ export function writeDefinitionFile(projectDir: string, filename: string, conten
 
 export function writeWorkflowSettingsFile(
   projectDir: string,
-  settings: string | dataform.IWorkflowSettings
+  settings: string | dataform.IWorkflowSettings,
 ): void {
   const fullPath = path.join(projectDir, "workflow_settings.yaml");
   const content = typeof settings === "string" ? settings : dumpYaml(settings);

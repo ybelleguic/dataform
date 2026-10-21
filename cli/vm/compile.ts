@@ -2,22 +2,26 @@ import * as fs from "fs";
 import * as glob from "glob";
 import * as path from "path";
 import * as semver from "semver";
-import { CompilerFunction, NodeVM } from "vm2";
 
 import { encode64 } from "df/common/protos";
+import { CompilerFunction, VmRunner } from "df/common/vm/vm_runner";
 import { dataform } from "df/protos/ts";
 
 export function compile(compileConfig: dataform.ICompileConfig) {
   compileConfig.projectDir = fs.realpathSync(path.resolve(compileConfig.projectDir));
   const coreBundlePath = path.join(
-    compileConfig.projectDir, "node_modules", "@dataform", "core", "bundle.js"
+    compileConfig.projectDir,
+    "node_modules",
+    "@dataform",
+    "core",
+    "bundle.js",
   );
   if (!fs.existsSync(coreBundlePath)) {
     throw new Error(
       "Could not find a recent installed version of @dataform/core in the project. Check that " +
         "either `dataformCoreVersion` is specified in `workflow_settings.yaml`, or " +
         "`@dataform/core` is specified in `package.json`. If using `package.json`, then run " +
-        "`dataform install`."
+        "`dataform install`.",
     );
   }
 
@@ -27,75 +31,53 @@ export function compile(compileConfig: dataform.ICompileConfig) {
   // through Node's resolver inside the vm covers every install layout
   // (package.json, workflow_settings.yaml, JiT) and matches what the user's
   // code will see. require() caches the bundle so the second call is free.
-  const indexGeneratorVm = new NodeVM({
-    wrapper: "none",
-    require: {
-      context: "sandbox",
-      root: compileConfig.projectDir,
-      external: true,
-      builtin: ["path"]
-    }
+  const indexGeneratorVm = new VmRunner({
+    projectDir: compileConfig.projectDir,
+    builtinModules: ["path"],
   });
   const compiler: CompilerFunction = indexGeneratorVm.run(
     'return require("@dataform/core").compiler',
-    vmIndexFileName
+    vmIndexFileName,
   );
   const dataformCoreVersion: string = indexGeneratorVm.run(
     'return require("@dataform/core").version || "0.0.0"',
-    vmIndexFileName
+    vmIndexFileName,
   );
 
-  const cliVersion = readCliVersion();
-  const cliParsed = semver.parse(cliVersion);
-  // cliParsed is null for unparseable strings, and "0.0.0" is the sentinel
-  // returned when package.json can't be read (unbundled local dev). In both
-  // cases skip the check rather than reject every real Core install.
-  if (cliParsed && cliVersion !== "0.0.0") {
-    const minCoreVersion = `${cliParsed.major}.${cliParsed.minor}.0`;
-    if (
-      semver.major(dataformCoreVersion) !== cliParsed.major ||
-      semver.lt(dataformCoreVersion, minCoreVersion)
-    ) {
-      throw new Error(
-        `@dataform/core ${dataformCoreVersion} is not compatible with @dataform/cli ` +
-          `${cliVersion}. The CLI requires @dataform/core >= ${minCoreVersion} ` +
-          `(matching major.minor). Set \`dataformCoreVersion: ${cliVersion}\` in ` +
-          `workflow_settings.yaml (or pin @dataform/core in package.json), then run ` +
-          `\`dataform install\`.`
-      );
-    }
-  }
+  checkCoreCompatibility(dataformCoreVersion, readCliVersion());
+  // Core older than 3.0.57 needs the shim below. Once MIN_SUPPORTED_CORE_VERSION is 3.0.57 or
+  // higher, delete the shim and its tests in cli/index_compile_test.ts.
   const needsCallerFileShim = semver.lt(dataformCoreVersion, "3.0.57");
 
-  // vm2 strips file paths from V8 CallSite objects inside the sandbox, so
-  // getCallerFile() in @dataform/core needs a fallback. Track the currently
-  // executing file via a host-side stack exposed through sandbox helpers, and
-  // expose it as a getter on `global.__dataform_current_file`.
+  // @dataform/core < 3.0.57 reads global.__dataform_current_file. Track the currently
+  // executing file on a host-side stack and expose it through that getter.
   const fileStack: string[] = [];
+  const sandbox: Record<string, any> = {};
+  if (needsCallerFileShim) {
+    sandbox.__df_enter = (p: string) => {
+      fileStack.push(p);
+    };
+    sandbox.__df_exit = () => {
+      fileStack.pop();
+    };
+    sandbox.__df_current = () => (fileStack.length > 0 ? fileStack[fileStack.length - 1] : null);
+  }
 
-  // Then use vm2's native compiler integration to apply the compiler to files.
-  const userCodeVm = new NodeVM({
-    wrapper: "none",
-    sandbox: {
-      __df_enter: (p: string) => { fileStack.push(p); },
-      __df_exit: () => { fileStack.pop(); },
-      __df_current: () => fileStack.length > 0 ? fileStack[fileStack.length - 1] : null
-    },
-    require: {
-      builtin: ["path"],
-      context: "sandbox",
-      external: true,
-      root: compileConfig.projectDir,
-      resolve: (moduleName, parentDirName) =>
-        path.join(parentDirName, path.relative(parentDirName, compileConfig.projectDir), moduleName)
-    },
-    sourceExtensions: ["js", "sql", "sqlx", "yaml", "yml"],
+  // Then use VmRunner to apply the compiler to files.
+  const userCodeVm = new VmRunner({
+    projectDir: compileConfig.projectDir,
+    sandbox,
+    builtinModules: ["path"],
+    sourceExtensions: ["js", "sql", "sqlx", "yaml", "yml", "ipynb", "md"],
     compiler: (code, filePath) => {
       let source = code;
       if (needsCallerFileShim && filePath === coreBundlePath) {
         source = patchOldCoreCallerFile(source);
       }
       const compiledCode = compiler(source, filePath);
+      if (!needsCallerFileShim) {
+        return compiledCode;
+      }
       return `
         __df_enter(${JSON.stringify(filePath)});
         try {
@@ -104,38 +86,41 @@ export function compile(compileConfig: dataform.ICompileConfig) {
           __df_exit();
         }
       `;
-    }
+    },
   });
 
   const hasWorkflowSettingsYaml = fs.existsSync(
-    path.join(compileConfig.projectDir, "workflow_settings.yaml")
+    path.join(compileConfig.projectDir, "workflow_settings.yaml"),
   );
-  const hasDataformJson = fs.existsSync(
-    path.join(compileConfig.projectDir, "dataform.json")
-  );
+  const hasDataformJson = fs.existsSync(path.join(compileConfig.projectDir, "dataform.json"));
 
   return userCodeVm.run(
     `
-      Object.defineProperty(global, '__dataform_current_file', {
+      ${
+        needsCallerFileShim
+          ? `Object.defineProperty(global, '__dataform_current_file', {
         configurable: true,
         get: function() { return __df_current(); }
-      });
-      ${hasWorkflowSettingsYaml
-        ? 'global.workflowSettingsYaml = require("./workflow_settings.yaml");'
-        : ''}
-      ${hasDataformJson
-        ? 'global.dataformJson = require("./dataform.json");'
-        : ''}
+      });`
+          : ""
+      }
+      ${
+        hasWorkflowSettingsYaml
+          ? 'global.workflowSettingsYaml = require("./workflow_settings.yaml");'
+          : ""
+      }
+      ${hasDataformJson ? 'global.dataformJson = require("./dataform.json");' : ""}
       return require("@dataform/core").main("${createCoreExecutionRequest(compileConfig)}")
     `,
-    vmIndexFileName
+    vmIndexFileName,
   );
 }
 
 export function listenForCompileRequest() {
   process.on("message", (compileConfig: dataform.ICompileConfig & { type?: string }) => {
-    // JiT messages are handled by handleJitRequest in worker.ts; skip them here.
-    if ((compileConfig as { type?: string })?.type === "jit_compile") {
+    // Compile requests are bare CompileConfig objects. Typed messages (jit_compile, rpc_response)
+    // belong to the JiT handlers in jit_worker.ts, which share this process; skip them here.
+    if (compileConfig?.type) {
       return;
     }
     try {
@@ -151,35 +136,55 @@ export function listenForCompileRequest() {
   });
 }
 
-if (require.main === module) {
-  if (process.send) {
-    process.send({ type: "worker_booted" });
-  }
-  listenForCompileRequest();
-}
-
 // Reads the CLI's own version from the package.json baked next to the bundle
 // by pkg_json(version = DF_VERSION). Returns "0.0.0" when unreadable.
 function readCliVersion(): string {
   try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(__dirname, "package.json"), "utf8")
-    );
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
     return pkg.version || "0.0.0";
   } catch {
     return "0.0.0";
   }
 }
 
+// The oldest @dataform/core version this CLI works with. It is not tied to the CLI version, so
+// releasing a new CLI version does not drop support for older Core versions. Only raise it on
+// purpose, and update the tests when you do.
+export const MIN_SUPPORTED_CORE_VERSION = "3.0.0";
+
+/**
+ * Throws an error if this CLI can't work with the installed @dataform/core version. Core must
+ * have the same major version as the CLI and be at least MIN_SUPPORTED_CORE_VERSION. Newer Core
+ * versions with the same major version are also fine.
+ */
+export function checkCoreCompatibility(coreVersion: string, cliVersion: string) {
+  const cliParsed = semver.parse(cliVersion);
+  // Skip the check if the CLI version is unknown or invalid. readCliVersion() returns "0.0.0"
+  // when it can't read package.json, e.g. when the CLI runs from source instead of a bundle.
+  if (!cliParsed || cliVersion === "0.0.0") {
+    return;
+  }
+  const majorFloor = `${cliParsed.major}.0.0`;
+  const minCoreVersion = semver.gt(MIN_SUPPORTED_CORE_VERSION, majorFloor)
+    ? MIN_SUPPORTED_CORE_VERSION
+    : majorFloor;
+  if (semver.major(coreVersion) !== cliParsed.major || semver.lt(coreVersion, minCoreVersion)) {
+    throw new Error(
+      `@dataform/core ${coreVersion} is not compatible with @dataform/cli ${cliVersion}. ` +
+        `The CLI requires @dataform/core >=${minCoreVersion} <${cliParsed.major + 1}.0.0. ` +
+        `Set \`dataformCoreVersion: ${cliVersion}\` in workflow_settings.yaml, or pin ` +
+        `@dataform/core in package.json and run \`dataform install\`.`,
+    );
+  }
+}
+
 // @dataform/core <= 3.0.56 has no `global.__dataform_current_file` fallback in
-// getCallerFile(), so paired with CLI >= 3.0.57 (which uses vm2 with path
-// stripping) every action fails with "Unable to find valid caller file".
-// Backport the fallback by rewriting the bundle text at load time. Gated on
-// version so we never touch newer core bundles whose layout differs.
+// getCallerFile(). Backport it by rewriting the bundle text at load time. Gated
+// on version so we never touch newer core bundles whose layout differs.
 const OLD_CORE_THROW =
   'if(!t)throw new Error("Unable to find valid caller file; please report this issue.")';
 const OLD_CORE_WITH_FALLBACK =
-  'if(!t){if(global.__dataform_current_file){t=global.__dataform_current_file}' +
+  "if(!t){if(global.__dataform_current_file){t=global.__dataform_current_file}" +
   'else{throw new Error("Unable to find valid caller file; please report this issue.")}}';
 
 function patchOldCoreCallerFile(source: string): string {
@@ -191,11 +196,11 @@ function patchOldCoreCallerFile(source: string): string {
  */
 function createCoreExecutionRequest(compileConfig: dataform.ICompileConfig): string {
   const filePaths = Array.from(
-    new Set<string>(glob.sync("!(node_modules)/**/*.*", { cwd: compileConfig.projectDir }))
+    new Set<string>(glob.sync("!(node_modules)/**/*.*", { cwd: compileConfig.projectDir })),
   );
 
   return encode64(dataform.CoreExecutionRequest, {
     // Add the list of file paths to the compile config if not already set.
-    compile: { compileConfig: { filePaths, ...compileConfig } }
+    compile: { compileConfig: { filePaths, ...compileConfig } },
   });
 }

@@ -10,8 +10,8 @@ function makeSession(): Session {
     "/tmp/root",
     dataform.ProjectConfig.create({
       defaultDatabase: "defaultProject",
-      defaultSchema: "defaultDataset"
-    })
+      defaultSchema: "defaultDataset",
+    }),
   );
 }
 
@@ -29,20 +29,20 @@ function build(config: any, filename = "definitions/graph.yaml"): PropertyGraph 
 const graphTarget = (name: string) => ({
   database: "defaultProject",
   schema: "defaultDataset",
-  name
+  name,
 });
 
 suite("property_graph", () => {
-  test("compiles a minimal graph with one entity and no relationships", () => {
+  test("compiles a minimal graph with one node and no edges", () => {
     const compiled = compile({
       name: "Simple",
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "proj.ds.Accounts",
-          keys: ["id"]
-        }
-      ]
+          keys: ["id"],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -52,15 +52,15 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "proj", schema: "ds", name: "Accounts" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `proj.ds.Accounts` AS Account KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `proj.ds.Accounts` AS Account KEY (id)\n)",
+      }),
     );
   });
 
@@ -68,13 +68,13 @@ suite("property_graph", () => {
     const compiled = compile({
       name: "Tagged",
       tags: ["nightly", "reporting"],
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "proj.ds.Accounts",
-          keys: ["id"]
-        }
-      ]
+          keys: ["id"],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -85,24 +85,22 @@ suite("property_graph", () => {
         description: "",
         disabled: false,
         tags: ["nightly", "reporting"],
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "proj", schema: "ds", name: "Accounts" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `proj.ds.Accounts` AS Account KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `proj.ds.Accounts` AS Account KEY (id)\n)",
+      }),
     );
   });
 
   test("normalizes scalar keys to a single-element list", () => {
     const compiled = compile({
       name: "G",
-      entities: [
-        { name: "A", dataSourceString: "p.d.A", keys: "id" }
-      ]
+      nodes: [{ name: "A", dataSourceString: "p.d.A", keys: "id" }],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -112,24 +110,22 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id)\n)",
+      }),
     );
   });
 
   test("parses 3-part dataSourceString into database.schema.name", () => {
     const compiled = compile({
       name: "G",
-      entities: [
-        { name: "A", dataSourceString: "myProj.myDs.MyTable", keys: ["id"] }
-      ]
+      nodes: [{ name: "A", dataSourceString: "myProj.myDs.MyTable", keys: ["id"] }],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -139,28 +135,28 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "myProj", schema: "myDs", name: "MyTable" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `myProj.myDs.MyTable` AS A KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `myProj.myDs.MyTable` AS A KEY (id)\n)",
+      }),
     );
   });
 
   test("resolves dataSourceDataset map form with default project fallback", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceDataset: { dataset: "customDs", table: "MyTable" },
-          keys: ["id"]
-        }
-      ]
+          keys: ["id"],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -170,29 +166,29 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "defaultProject", schema: "customDs", name: "MyTable" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `defaultProject.customDs.MyTable` AS A KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `defaultProject.customDs.MyTable` AS A KEY (id)\n)",
+      }),
     );
   });
 
-  test("synthesizes default label named after entity when root-level fields set", () => {
+  test("synthesizes default label named after node when root-level fields set", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fields: [{ name: "balance", expression: "balance" }]
-        }
-      ]
+          fields: [{ name: "balance", expression: "balance" }],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -202,7 +198,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -213,28 +209,28 @@ suite("property_graph", () => {
                 description: "",
                 fields: [{ name: "balance", expression: "balance" }],
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
-          "NODE TABLES (\n  `p.d.A` AS Account KEY (id) DEFAULT LABEL PROPERTIES (balance)\n)"
-      })
+          "NODE TABLES (\n  `p.d.A` AS Account KEY (id) DEFAULT LABEL PROPERTIES (balance)\n)",
+      }),
     );
   });
 
   test("expands field shorthand strings into {name, expression} objects", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fields: ["balance", "owner"]
-        }
-      ]
+          fields: ["balance", "owner"],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -244,7 +240,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -255,31 +251,31 @@ suite("property_graph", () => {
                 description: "",
                 fields: [
                   { name: "balance", expression: "balance" },
-                  { name: "owner", expression: "owner" }
+                  { name: "owner", expression: "owner" },
                 ],
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
-          "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES (balance, owner)\n)"
-      })
+          "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES (balance, owner)\n)",
+      }),
     );
   });
 
   test("fieldWildcard.importAll renders as PROPERTIES ARE ALL COLUMNS", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fieldWildcard: { importAll: true }
-        }
-      ]
+          fieldWildcard: { importAll: true },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -289,33 +285,31 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
             keys: ["id"],
-            labels: [
-              { name: "A", description: "", importAll: true, isDefault: true }
-            ]
-          }
+            labels: [{ name: "A", description: "", importAll: true, isDefault: true }],
+          },
         ],
         graphBody:
-          "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES ARE ALL COLUMNS\n)"
-      })
+          "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES ARE ALL COLUMNS\n)",
+      }),
     );
   });
 
   test("fieldWildcard with except renders as PROPERTIES ARE ALL COLUMNS EXCEPT (...)", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fieldWildcard: { importAll: true, except: ["secret", "internal"] }
-        }
-      ]
+          fieldWildcard: { importAll: true, except: ["secret", "internal"] },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -325,7 +319,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -336,32 +330,32 @@ suite("property_graph", () => {
                 description: "",
                 importAll: true,
                 importExcept: ["secret", "internal"],
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL " +
-          "PROPERTIES ARE ALL COLUMNS EXCEPT (secret, internal)\n)"
-      })
+          "PROPERTIES ARE ALL COLUMNS EXCEPT (secret, internal)\n)",
+      }),
     );
   });
 
   test("multiple explicit labels render in declared order", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "p.d.A",
           keys: ["id"],
           labels: [
             { name: "Account", fields: [{ name: "id", expression: "id" }] },
-            { name: "Auditable", fields: [{ name: "createdAt", expression: "created_at" }] }
-          ]
-        }
-      ]
+            { name: "Auditable", fields: [{ name: "createdAt", expression: "created_at" }] },
+          ],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -371,7 +365,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -381,45 +375,43 @@ suite("property_graph", () => {
                 name: "Account",
                 fields: [{ name: "id", expression: "id" }],
                 importAll: false,
-                isDefault: false
+                isDefault: false,
               },
               {
                 name: "Auditable",
                 fields: [{ name: "createdAt", expression: "created_at" }],
                 importAll: false,
-                isDefault: false
-              }
-            ]
-          }
+                isDefault: false,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS Account KEY (id) " +
           "LABEL Account PROPERTIES (id) " +
-          "LABEL Auditable PROPERTIES (created_at AS createdAt)\n)"
-      })
+          "LABEL Auditable PROPERTIES (created_at AS createdAt)\n)",
+      }),
     );
   });
 
-  test("relationship endpoints render SOURCE/DESTINATION KEY REFERENCES clauses", () => {
+  test("edge endpoints render SOURCE/DESTINATION KEY REFERENCES clauses", () => {
     const compiled = compile({
       name: "FinGraph",
-      entities: [
-        { name: "Account", dataSourceString: "p.d.Accounts", keys: ["id"] }
-      ],
-      relationships: [
+      nodes: [{ name: "Account", dataSourceString: "p.d.Accounts", keys: ["id"] }],
+      edges: [
         {
           name: "Transfer",
           dataSourceString: "p.d.Transfers",
           source: {
-            entity: "Account",
-            joinKeys: { relationshipColumns: ["sender_id"], entityColumns: ["id"] }
+            node: "Account",
+            joinKeys: { edgeColumns: ["sender_id"], nodeColumns: ["id"] },
           },
           destination: {
-            entity: "Account",
-            joinKeys: { relationshipColumns: ["receiver_id"], entityColumns: ["id"] }
-          }
-        }
-      ]
+            node: "Account",
+            joinKeys: { edgeColumns: ["receiver_id"], nodeColumns: ["id"] },
+          },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -429,58 +421,56 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "Accounts" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        relationships: [
+        edges: [
           {
             name: "Transfer",
             dataSource: { database: "p", schema: "d", name: "Transfers" },
             source: {
-              entity: "Account",
-              relationshipColumns: ["sender_id"],
-              entityColumns: ["id"]
+              node: "Account",
+              edgeColumns: ["sender_id"],
+              nodeColumns: ["id"],
             },
             destination: {
-              entity: "Account",
-              relationshipColumns: ["receiver_id"],
-              entityColumns: ["id"]
-            }
-          }
+              node: "Account",
+              edgeColumns: ["receiver_id"],
+              nodeColumns: ["id"],
+            },
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.Accounts` AS Account KEY (id)\n)\n" +
           "EDGE TABLES (\n  `p.d.Transfers` AS Transfer " +
           "SOURCE KEY (sender_id) REFERENCES Account (id) " +
-          "DESTINATION KEY (receiver_id) REFERENCES Account (id)\n)"
-      })
+          "DESTINATION KEY (receiver_id) REFERENCES Account (id)\n)",
+      }),
     );
   });
 
-  test("endpoint entity_columns default to referenced entity keys when omitted", () => {
+  test("endpoint node_columns default to referenced node keys when omitted", () => {
     const compiled = compile({
       name: "G",
-      entities: [
-        { name: "Account", dataSourceString: "p.d.A", keys: ["id"] }
-      ],
-      relationships: [
+      nodes: [{ name: "Account", dataSourceString: "p.d.A", keys: ["id"] }],
+      edges: [
         {
           name: "SelfLink",
           dataSourceString: "p.d.Links",
           source: {
-            entity: "Account",
-            joinKeys: { relationshipColumns: ["from_id"] }
+            node: "Account",
+            joinKeys: { edgeColumns: ["from_id"] },
           },
           destination: {
-            entity: "Account",
-            joinKeys: { relationshipColumns: ["to_id"] }
-          }
-        }
-      ]
+            node: "Account",
+            joinKeys: { edgeColumns: ["to_id"] },
+          },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -490,59 +480,59 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        relationships: [
+        edges: [
           {
             name: "SelfLink",
             dataSource: { database: "p", schema: "d", name: "Links" },
             source: {
-              entity: "Account",
-              relationshipColumns: ["from_id"],
-              entityColumns: ["id"]
+              node: "Account",
+              edgeColumns: ["from_id"],
+              nodeColumns: ["id"],
             },
             destination: {
-              entity: "Account",
-              relationshipColumns: ["to_id"],
-              entityColumns: ["id"]
-            }
-          }
+              node: "Account",
+              edgeColumns: ["to_id"],
+              nodeColumns: ["id"],
+            },
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS Account KEY (id)\n)\n" +
           "EDGE TABLES (\n  `p.d.Links` AS SelfLink " +
           "SOURCE KEY (from_id) REFERENCES Account (id) " +
-          "DESTINATION KEY (to_id) REFERENCES Account (id)\n)"
-      })
+          "DESTINATION KEY (to_id) REFERENCES Account (id)\n)",
+      }),
     );
   });
 
   test("every emitted NODE and EDGE table has explicit AS alias", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         { name: "Account", dataSourceString: "p.d.Accounts", keys: ["id"] },
-        { name: "Person", dataSourceString: "p.d.Persons", keys: ["id"] }
+        { name: "Person", dataSourceString: "p.d.Persons", keys: ["id"] },
       ],
-      relationships: [
+      edges: [
         {
           name: "Owns",
           dataSourceString: "p.d.Ownership",
           source: {
-            entity: "Person",
-            joinKeys: { relationshipColumns: ["person_id"] }
+            node: "Person",
+            joinKeys: { edgeColumns: ["person_id"] },
           },
           destination: {
-            entity: "Account",
-            joinKeys: { relationshipColumns: ["account_id"] }
-          }
-        }
-      ]
+            node: "Account",
+            joinKeys: { edgeColumns: ["account_id"] },
+          },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -552,164 +542,164 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "Accounts" },
-            keys: ["id"]
+            keys: ["id"],
           },
           {
             name: "Person",
             dataSource: { database: "p", schema: "d", name: "Persons" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        relationships: [
+        edges: [
           {
             name: "Owns",
             dataSource: { database: "p", schema: "d", name: "Ownership" },
             source: {
-              entity: "Person",
-              relationshipColumns: ["person_id"],
-              entityColumns: ["id"]
+              node: "Person",
+              edgeColumns: ["person_id"],
+              nodeColumns: ["id"],
             },
             destination: {
-              entity: "Account",
-              relationshipColumns: ["account_id"],
-              entityColumns: ["id"]
-            }
-          }
+              node: "Account",
+              edgeColumns: ["account_id"],
+              nodeColumns: ["id"],
+            },
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.Accounts` AS Account KEY (id),\n" +
           "  `p.d.Persons` AS Person KEY (id)\n)\n" +
           "EDGE TABLES (\n  `p.d.Ownership` AS Owns " +
           "SOURCE KEY (person_id) REFERENCES Person (id) " +
-          "DESTINATION KEY (account_id) REFERENCES Account (id)\n)"
-      })
+          "DESTINATION KEY (account_id) REFERENCES Account (id)\n)",
+      }),
     );
   });
 
   test("errors when graph name is missing", () => {
     expect(() =>
       compile({
-        entities: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }]
-      })
+        nodes: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
+      }),
     ).to.throw("Property graphs must have a populated 'name' field.");
   });
 
-  test("errors when entities list is empty", () => {
-    expect(() => compile({ name: "G", entities: [] })).to.throw(
-      "Property graph 'G' must declare at least one entity."
+  test("errors when nodes list is empty", () => {
+    expect(() => compile({ name: "G", nodes: [] })).to.throw(
+      "Property graph 'G' must declare at least one node.",
     );
   });
 
-  test("errors when entity has no data source", () => {
+  test("errors when node has no data source", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [{ name: "A", keys: ["id"] }]
-      })
-    ).to.throw("entity 'A': must declare a data source.");
+        nodes: [{ name: "A", keys: ["id"] }],
+      }),
+    ).to.throw("node 'A': must declare a data source.");
   });
 
-  test("errors when entity has no keys", () => {
+  test("errors when node has no keys", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [{ name: "A", dataSourceString: "p.d.A" }]
-      })
-    ).to.throw("entity 'A' must declare 'keys'.");
+        nodes: [{ name: "A", dataSourceString: "p.d.A" }],
+      }),
+    ).to.throw("node 'A' must declare 'keys'.");
   });
 
-  test("errors when entity has both root-level fields and labels list", () => {
+  test("errors when node has both root-level fields and labels list", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSourceString: "p.d.A",
             keys: ["id"],
             fields: [{ name: "x", expression: "x" }],
-            labels: [{ name: "A", fields: [{ name: "y", expression: "y" }] }]
-          }
-        ]
-      })
+            labels: [{ name: "A", fields: [{ name: "y", expression: "y" }] }],
+          },
+        ],
+      }),
     ).to.throw("cannot combine root-level 'fields'/'fieldWildcard' with a 'labels' list");
   });
 
-  test("errors when relationship is missing source", () => {
+  test("errors when edge is missing source", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
-        relationships: [
+        nodes: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
+        edges: [
           {
             name: "R",
             dataSourceString: "p.d.R",
             destination: {
-              entity: "A",
-              joinKeys: { relationshipColumns: ["a_id"] }
-            }
-          }
-        ]
-      })
-    ).to.throw("relationship 'R' must declare 'source'.");
+              node: "A",
+              joinKeys: { edgeColumns: ["a_id"] },
+            },
+          },
+        ],
+      }),
+    ).to.throw("edge 'R' must declare 'source'.");
   });
 
-  test("errors when endpoint references an unknown entity", () => {
+  test("errors when endpoint references an unknown node", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
-        relationships: [
+        nodes: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
+        edges: [
           {
             name: "R",
             dataSourceString: "p.d.R",
             source: {
-              entity: "Ghost",
-              joinKeys: { relationshipColumns: ["x"] }
+              node: "Ghost",
+              joinKeys: { edgeColumns: ["x"] },
             },
             destination: {
-              entity: "A",
-              joinKeys: { relationshipColumns: ["y"] }
-            }
-          }
-        ]
-      })
-    ).to.throw("relationship 'R' source references unknown entity 'Ghost'.");
+              node: "A",
+              joinKeys: { edgeColumns: ["y"] },
+            },
+          },
+        ],
+      }),
+    ).to.throw("edge 'R' source references unknown node 'Ghost'.");
   });
 
-  test("errors on duplicate entity names", () => {
+  test("errors on duplicate node names", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           { name: "A", dataSourceString: "p.d.A1", keys: ["id"] },
-          { name: "A", dataSourceString: "p.d.A2", keys: ["id"] }
-        ]
-      })
-    ).to.throw("duplicate entity name 'A'");
+          { name: "A", dataSourceString: "p.d.A2", keys: ["id"] },
+        ],
+      }),
+    ).to.throw("duplicate node name 'A'");
   });
 
   test("rejects dataSourceCatalog variant", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSourceCatalog: {
               project: "p",
               catalog: "cat",
               namespace: "ns",
-              table: "T"
+              table: "T",
             },
-            keys: ["id"]
-          }
-        ]
-      })
+            keys: ["id"],
+          },
+        ],
+      }),
     ).to.throw("Catalog-based data sources");
   });
 
@@ -717,14 +707,14 @@ suite("property_graph", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSourceString: "proj.cat.ns.tbl",
-            keys: ["id"]
-          }
-        ]
-      })
+            keys: ["id"],
+          },
+        ],
+      }),
     ).to.throw("Catalog-based data sources");
   });
 
@@ -732,19 +722,15 @@ suite("property_graph", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
-          { name: "A", dataSourceString: "ds.tbl", keys: ["id"] }
-        ]
-      })
+        nodes: [{ name: "A", dataSourceString: "ds.tbl", keys: ["id"] }],
+      }),
     ).to.throw("must be 'project.dataset.table'");
   });
 
   test("preserves composite keys list", () => {
     const compiled = compile({
       name: "G",
-      entities: [
-        { name: "A", dataSourceString: "p.d.A", keys: ["id", "date"] }
-      ]
+      nodes: [{ name: "A", dataSourceString: "p.d.A", keys: ["id", "date"] }],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -754,32 +740,30 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
-            keys: ["id", "date"]
-          }
+            keys: ["id", "date"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id, date)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id, date)\n)",
+      }),
     );
   });
 
-  test("joinKeys array shorthand expands to relationshipColumns with defaulted entityColumns", () => {
+  test("joinKeys array shorthand expands to edgeColumns with defaulted nodeColumns", () => {
     const compiled = compile({
       name: "G",
-      entities: [
-        { name: "Account", dataSourceString: "p.d.A", keys: ["id"] }
-      ],
-      relationships: [
+      nodes: [{ name: "Account", dataSourceString: "p.d.A", keys: ["id"] }],
+      edges: [
         {
           name: "Link",
           dataSourceString: "p.d.L",
-          source: { entity: "Account", joinKeys: ["from_id"] },
-          destination: { entity: "Account", joinKeys: ["to_id"] }
-        }
-      ]
+          source: { node: "Account", joinKeys: ["from_id"] },
+          destination: { node: "Account", joinKeys: ["to_id"] },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -789,35 +773,35 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        relationships: [
+        edges: [
           {
             name: "Link",
             dataSource: { database: "p", schema: "d", name: "L" },
             source: {
-              entity: "Account",
-              relationshipColumns: ["from_id"],
-              entityColumns: ["id"]
+              node: "Account",
+              edgeColumns: ["from_id"],
+              nodeColumns: ["id"],
             },
             destination: {
-              entity: "Account",
-              relationshipColumns: ["to_id"],
-              entityColumns: ["id"]
-            }
-          }
+              node: "Account",
+              edgeColumns: ["to_id"],
+              nodeColumns: ["id"],
+            },
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS Account KEY (id)\n)\n" +
           "EDGE TABLES (\n  `p.d.L` AS Link " +
           "SOURCE KEY (from_id) REFERENCES Account (id) " +
-          "DESTINATION KEY (to_id) REFERENCES Account (id)\n)"
-      })
+          "DESTINATION KEY (to_id) REFERENCES Account (id)\n)",
+      }),
     );
   });
 
@@ -825,29 +809,29 @@ suite("property_graph", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSourceString: "p.d.A",
             keys: ["id"],
-            labels: [{ name: "Empty" }]
-          }
-        ]
-      })
+            labels: [{ name: "Empty" }],
+          },
+        ],
+      }),
     ).to.throw("must declare at least one of: 'fields', 'fieldWildcard', 'description'");
   });
 
   test("fields:{importAll:true} map form hoists to fieldWildcard", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fields: { importAll: true }
-        }
-      ]
+          fields: { importAll: true },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -857,33 +841,31 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
             keys: ["id"],
-            labels: [
-              { name: "A", description: "", importAll: true, isDefault: true }
-            ]
-          }
+            labels: [{ name: "A", description: "", importAll: true, isDefault: true }],
+          },
         ],
         graphBody:
-          "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES ARE ALL COLUMNS\n)"
-      })
+          "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES ARE ALL COLUMNS\n)",
+      }),
     );
   });
 
   test("fields:{importAll:true, except:[...]} map form hoists with except", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fields: { importAll: true, except: ["secret"] }
-        }
-      ]
+          fields: { importAll: true, except: ["secret"] },
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -893,7 +875,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -904,29 +886,29 @@ suite("property_graph", () => {
                 description: "",
                 importAll: true,
                 importExcept: ["secret"],
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL " +
-          "PROPERTIES ARE ALL COLUMNS EXCEPT (secret)\n)"
-      })
+          "PROPERTIES ARE ALL COLUMNS EXCEPT (secret)\n)",
+      }),
     );
   });
 
   test("synthesized default label sets isDefault=true and renders DEFAULT LABEL", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          fields: [{ name: "balance", expression: "balance" }]
-        }
-      ]
+          fields: [{ name: "balance", expression: "balance" }],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -936,7 +918,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -947,30 +929,28 @@ suite("property_graph", () => {
                 description: "",
                 fields: [{ name: "balance", expression: "balance" }],
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
-          "NODE TABLES (\n  `p.d.A` AS Account KEY (id) DEFAULT LABEL PROPERTIES (balance)\n)"
-      })
+          "NODE TABLES (\n  `p.d.A` AS Account KEY (id) DEFAULT LABEL PROPERTIES (balance)\n)",
+      }),
     );
   });
 
   test("explicitly configured labels set isDefault=false and render LABEL <name>", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          labels: [
-            { name: "Account", fields: [{ name: "id", expression: "id" }] }
-          ]
-        }
-      ]
+          labels: [{ name: "Account", fields: [{ name: "id", expression: "id" }] }],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -980,7 +960,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -990,14 +970,13 @@ suite("property_graph", () => {
                 name: "Account",
                 fields: [{ name: "id", expression: "id" }],
                 importAll: false,
-                isDefault: false
-              }
-            ]
-          }
+                isDefault: false,
+              },
+            ],
+          },
         ],
-        graphBody:
-          "NODE TABLES (\n  `p.d.A` AS Account KEY (id) LABEL Account PROPERTIES (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `p.d.A` AS Account KEY (id) LABEL Account PROPERTIES (id)\n)",
+      }),
     );
   });
 
@@ -1005,7 +984,7 @@ suite("property_graph", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSourceString: "p.d.A",
@@ -1014,18 +993,18 @@ suite("property_graph", () => {
               {
                 name: "Account",
                 description: "customer accounts",
-                fields: [{ name: "id", expression: "id" }]
-              }
-            ]
-          }
-        ]
-      })
+                fields: [{ name: "id", expression: "id" }],
+              },
+            ],
+          },
+        ],
+      }),
     ).to.throw("only allowed on the DEFAULT label");
 
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSourceString: "p.d.A",
@@ -1034,19 +1013,19 @@ suite("property_graph", () => {
               {
                 name: "Account",
                 synonyms: ["customer"],
-                fields: [{ name: "id", expression: "id" }]
-              }
-            ]
-          }
-        ]
-      })
+                fields: [{ name: "id", expression: "id" }],
+              },
+            ],
+          },
+        ],
+      }),
     ).to.throw("only allowed on the DEFAULT label");
   });
 
   test("field description and synonyms render as per-field OPTIONS(...)", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
@@ -1056,11 +1035,11 @@ suite("property_graph", () => {
               name: "balance",
               expression: "balance",
               description: "current balance in USD",
-              synonyms: ["amount"]
-            }
-          ]
-        }
-      ]
+              synonyms: ["amount"],
+            },
+          ],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1070,7 +1049,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -1084,19 +1063,19 @@ suite("property_graph", () => {
                     name: "balance",
                     expression: "balance",
                     description: "current balance in USD",
-                    synonyms: ["amount"]
-                  }
+                    synonyms: ["amount"],
+                  },
                 ],
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES " +
-          `(balance OPTIONS(description="current balance in USD", synonyms=["amount"]))\n)`
-      })
+          `(balance OPTIONS(description="current balance in USD", synonyms=["amount"]))\n)`,
+      }),
     );
   });
 
@@ -1104,7 +1083,7 @@ suite("property_graph", () => {
     const compiled = compile({
       name: "G",
       description: "high-value customer graph",
-      entities: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }]
+      nodes: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1114,29 +1093,29 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         disabled: false,
         description: "high-value customer graph",
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id)\n)",
+      }),
     );
   });
 
-  test("entity with only description synthesizes a DEFAULT LABEL with OPTIONS", () => {
+  test("node with only description synthesizes a DEFAULT LABEL with OPTIONS", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "Account",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          description: "customer account entity"
-        }
-      ]
+          description: "customer account entity",
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1146,7 +1125,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "Account",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -1156,29 +1135,29 @@ suite("property_graph", () => {
                 name: "Account",
                 description: "customer account entity",
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS Account KEY (id) DEFAULT LABEL " +
-          `OPTIONS(description="customer account entity")\n)`
-      })
+          `OPTIONS(description="customer account entity")\n)`,
+      }),
     );
   });
 
   test("string quoting in OPTIONS escapes embedded double quotes and backslashes", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          description: `has "quotes" and \\ backslash`
-        }
-      ]
+          description: `has "quotes" and \\ backslash`,
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1188,7 +1167,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -1198,29 +1177,29 @@ suite("property_graph", () => {
                 name: "A",
                 description: `has "quotes" and \\ backslash`,
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL " +
-          `OPTIONS(description="has \\"quotes\\" and \\\\ backslash")\n)`
-      })
+          `OPTIONS(description="has \\"quotes\\" and \\\\ backslash")\n)`,
+      }),
     );
   });
 
   test("string quoting in OPTIONS escapes newlines carriage returns and tabs", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
           keys: ["id"],
-          description: "line1\nline2\r\nline3\ttab"
-        }
-      ]
+          description: "line1\nline2\r\nline3\ttab",
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1230,7 +1209,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -1240,22 +1219,22 @@ suite("property_graph", () => {
                 name: "A",
                 description: "line1\nline2\r\nline3\ttab",
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL " +
-          `OPTIONS(description="line1\\nline2\\r\\nline3\\ttab")\n)`
-      })
+          `OPTIONS(description="line1\\nline2\\r\\nline3\\ttab")\n)`,
+      }),
     );
   });
 
   test("label with name 'DEFAULT' is treated as DEFAULT LABEL", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
@@ -1265,11 +1244,11 @@ suite("property_graph", () => {
               name: "DEFAULT",
               description: "the default",
               synonyms: ["main"],
-              fields: [{ name: "id", expression: "id" }]
-            }
-          ]
-        }
-      ]
+              fields: [{ name: "id", expression: "id" }],
+            },
+          ],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1279,7 +1258,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -1291,22 +1270,22 @@ suite("property_graph", () => {
                 synonyms: ["main"],
                 fields: [{ name: "id", expression: "id" }],
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
         graphBody:
           "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL " +
-          `OPTIONS(description="the default", synonyms=["main"]) PROPERTIES (id)\n)`
-      })
+          `OPTIONS(description="the default", synonyms=["main"]) PROPERTIES (id)\n)`,
+      }),
     );
   });
 
   test("label name 'default' is case-insensitive and treated as DEFAULT LABEL", () => {
     const compiled = compile({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           dataSourceString: "p.d.A",
@@ -1314,11 +1293,11 @@ suite("property_graph", () => {
           labels: [
             {
               name: "default",
-              fields: [{ name: "id", expression: "id" }]
-            }
-          ]
-        }
-      ]
+              fields: [{ name: "id", expression: "id" }],
+            },
+          ],
+        },
+      ],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1328,7 +1307,7 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
@@ -1338,13 +1317,13 @@ suite("property_graph", () => {
                 name: "A",
                 fields: [{ name: "id", expression: "id" }],
                 importAll: false,
-                isDefault: true
-              }
-            ]
-          }
+                isDefault: true,
+              },
+            ],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id) DEFAULT LABEL PROPERTIES (id)\n)",
+      }),
     );
   });
 
@@ -1352,18 +1331,18 @@ suite("property_graph", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSourceString: "p.d.A",
             keys: ["id"],
             labels: [
               { name: "DEFAULT", fields: [{ name: "id", expression: "id" }] },
-              { name: "default", fields: [{ name: "id", expression: "id" }] }
-            ]
-          }
-        ]
-      })
+              { name: "default", fields: [{ name: "id", expression: "id" }] },
+            ],
+          },
+        ],
+      }),
     ).to.throw("only one DEFAULT label is allowed");
   });
 
@@ -1371,7 +1350,7 @@ suite("property_graph", () => {
     const compiled = compile({
       name: "G",
       disabled: true,
-      entities: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }]
+      nodes: [{ name: "A", dataSourceString: "p.d.A", keys: ["id"] }],
     });
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1381,28 +1360,28 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: true,
-        entities: [
+        nodes: [
           {
             name: "A",
             dataSource: { database: "p", schema: "d", name: "A" },
-            keys: ["id"]
-          }
+            keys: ["id"],
+          },
         ],
-        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id)\n)"
-      })
+        graphBody: "NODE TABLES (\n  `p.d.A` AS A KEY (id)\n)",
+      }),
     );
   });
 
   test("scalar ref normalizes to dataSourceRef and populates dependencyTargets", () => {
     const compiled = build({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           ref: "books",
-          keys: ["id"]
-        }
-      ]
+          keys: ["id"],
+        },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1413,21 +1392,21 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [{ name: "A", keys: ["id"] }]
-      })
+        nodes: [{ name: "A", keys: ["id"] }],
+      }),
     );
   });
 
   test("object ref preserves schema and database in dependencyTargets", () => {
     const compiled = build({
       name: "G",
-      entities: [
+      nodes: [
         {
           name: "A",
           ref: { name: "books", schema: "analytics", database: "proj" },
-          keys: ["id"]
-        }
-      ]
+          keys: ["id"],
+        },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1435,23 +1414,28 @@ suite("property_graph", () => {
         target: graphTarget("G"),
         canonicalTarget: graphTarget("G"),
         dependencyTargets: [
-          { database: "proj", schema: "analytics", name: "books", includeDependentAssertions: false }
+          {
+            database: "proj",
+            schema: "analytics",
+            name: "books",
+            includeDependentAssertions: false,
+          },
         ],
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [{ name: "A", keys: ["id"] }]
-      })
+        nodes: [{ name: "A", keys: ["id"] }],
+      }),
     );
   });
 
-  test("duplicate refs across entities dedupe in dependencyTargets", () => {
+  test("duplicate refs across nodes dedupe in dependencyTargets", () => {
     const compiled = build({
       name: "G",
-      entities: [
+      nodes: [
         { name: "A", ref: "books", keys: ["id"] },
-        { name: "B", ref: "books", keys: ["id"] }
-      ]
+        { name: "B", ref: "books", keys: ["id"] },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1462,11 +1446,11 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           { name: "A", keys: ["id"] },
-          { name: "B", keys: ["id"] }
-        ]
-      })
+          { name: "B", keys: ["id"] },
+        ],
+      }),
     );
   });
 
@@ -1474,10 +1458,10 @@ suite("property_graph", () => {
     const compiled = build({
       name: "G",
       dependOnDependencyAssertions: true,
-      entities: [
+      nodes: [
         { name: "A", ref: "books", keys: ["id"] },
-        { name: "B", ref: "authors", keys: ["id"] }
-      ]
+        { name: "B", ref: "authors", keys: ["id"] },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1486,23 +1470,26 @@ suite("property_graph", () => {
         canonicalTarget: graphTarget("G"),
         dependencyTargets: [
           { name: "books", includeDependentAssertions: true },
-          { name: "authors", includeDependentAssertions: true }
+          { name: "authors", includeDependentAssertions: true },
         ],
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [{ name: "A", keys: ["id"] }, { name: "B", keys: ["id"] }]
-      })
+        nodes: [
+          { name: "A", keys: ["id"] },
+          { name: "B", keys: ["id"] },
+        ],
+      }),
     );
   });
 
   test("ref-level includeDependentAssertions propagates to that dependency only", () => {
     const compiled = build({
       name: "G",
-      entities: [
+      nodes: [
         { name: "A", ref: { name: "books", includeDependentAssertions: true }, keys: ["id"] },
-        { name: "B", ref: "authors", keys: ["id"] }
-      ]
+        { name: "B", ref: "authors", keys: ["id"] },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1511,13 +1498,16 @@ suite("property_graph", () => {
         canonicalTarget: graphTarget("G"),
         dependencyTargets: [
           { name: "books", includeDependentAssertions: true },
-          { name: "authors", includeDependentAssertions: false }
+          { name: "authors", includeDependentAssertions: false },
         ],
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [{ name: "A", keys: ["id"] }, { name: "B", keys: ["id"] }]
-      })
+        nodes: [
+          { name: "A", keys: ["id"] },
+          { name: "B", keys: ["id"] },
+        ],
+      }),
     );
   });
 
@@ -1525,10 +1515,10 @@ suite("property_graph", () => {
     const compiled = build({
       name: "G",
       dependOnDependencyAssertions: true,
-      entities: [
+      nodes: [
         { name: "A", ref: { name: "books", includeDependentAssertions: false }, keys: ["id"] },
-        { name: "B", ref: "authors", keys: ["id"] }
-      ]
+        { name: "B", ref: "authors", keys: ["id"] },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1537,32 +1527,35 @@ suite("property_graph", () => {
         canonicalTarget: graphTarget("G"),
         dependencyTargets: [
           { name: "books", includeDependentAssertions: false },
-          { name: "authors", includeDependentAssertions: true }
+          { name: "authors", includeDependentAssertions: true },
         ],
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [{ name: "A", keys: ["id"] }, { name: "B", keys: ["id"] }]
-      })
+        nodes: [
+          { name: "A", keys: ["id"] },
+          { name: "B", keys: ["id"] },
+        ],
+      }),
     );
   });
 
-  test("ref on relationship also normalizes and populates dependencyTargets", () => {
+  test("ref on edge also normalizes and populates dependencyTargets", () => {
     const compiled = build({
       name: "G",
-      entities: [
+      nodes: [
         { name: "A", dataSourceString: "p.d.A", keys: ["id"] },
-        { name: "B", dataSourceString: "p.d.B", keys: ["id"] }
+        { name: "B", dataSourceString: "p.d.B", keys: ["id"] },
       ],
-      relationships: [
+      edges: [
         {
           name: "R",
           ref: "wrote",
           keys: ["a_id", "b_id"],
-          source: { entity: "A", joinKeys: ["a_id"] },
-          destination: { entity: "B", joinKeys: ["b_id"] }
-        }
-      ]
+          source: { node: "A", joinKeys: ["a_id"] },
+          destination: { node: "B", joinKeys: ["b_id"] },
+        },
+      ],
     }).compile();
 
     expect(asPlainObject(compiled)).deep.equals(
@@ -1573,19 +1566,19 @@ suite("property_graph", () => {
         fileName: "definitions/graph.yaml",
         description: "",
         disabled: false,
-        entities: [
+        nodes: [
           { name: "A", dataSource: { database: "p", schema: "d", name: "A" }, keys: ["id"] },
-          { name: "B", dataSource: { database: "p", schema: "d", name: "B" }, keys: ["id"] }
+          { name: "B", dataSource: { database: "p", schema: "d", name: "B" }, keys: ["id"] },
         ],
-        relationships: [
+        edges: [
           {
             name: "R",
             keys: ["a_id", "b_id"],
-            source: { entity: "A", relationshipColumns: ["a_id"], entityColumns: ["id"] },
-            destination: { entity: "B", relationshipColumns: ["b_id"], entityColumns: ["id"] }
-          }
-        ]
-      })
+            source: { node: "A", edgeColumns: ["a_id"], nodeColumns: ["id"] },
+            destination: { node: "B", edgeColumns: ["b_id"], nodeColumns: ["id"] },
+          },
+        ],
+      }),
     );
   });
 
@@ -1593,14 +1586,14 @@ suite("property_graph", () => {
     expect(() =>
       compile({
         name: "G",
-        entities: [
+        nodes: [
           {
             name: "A",
             ref: { schema: "s" },
-            keys: ["id"]
-          }
-        ]
-      })
+            keys: ["id"],
+          },
+        ],
+      }),
     ).to.throw("'ref' must include a 'name'");
   });
 });

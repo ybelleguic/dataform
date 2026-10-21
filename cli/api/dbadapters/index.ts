@@ -13,7 +13,7 @@ export interface IExecutionResultRaw extends IExecutionResult {
 }
 
 export interface IBigQueryError extends Error {
-  metadata?: dataform.IExecutionMetadata
+  metadata?: dataform.IExecutionMetadata;
 }
 
 export interface IDbClient {
@@ -31,7 +31,7 @@ export interface IDbClient {
         dryRun?: boolean;
         reservation?: string;
       };
-    }
+    },
   ): Promise<IExecutionResult>;
 
   executeRaw(
@@ -46,7 +46,7 @@ export interface IDbClient {
         dryRun?: boolean;
         reservation?: string;
       };
-    }
+    },
   ): Promise<IExecutionResultRaw>;
 }
 
@@ -54,10 +54,13 @@ export interface IDbAdapter extends IDbClient {
   evaluate(queryOrAction: QueryOrAction): Promise<dataform.IQueryEvaluation[]>;
 
   schemas(database: string): Promise<string[]>;
-  createSchema(database: string, schema: string): Promise<void>;
+  createSchema(database: string, schema: string, location?: string): Promise<void>;
 
   tables(database: string, schema?: string): Promise<dataform.ITableMetadata[]>;
-  search(searchText: string, options?: { limit: number }): Promise<dataform.ITableMetadata[]>;
+  search(
+    searchText: string,
+    options?: { limit: number; location?: string },
+  ): Promise<dataform.ITableMetadata[]>;
   table(target: dataform.ITarget): Promise<dataform.ITableMetadata>;
   deleteTable(target: dataform.ITarget): Promise<void>;
 

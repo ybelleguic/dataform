@@ -1,4 +1,11 @@
-import { BigQuery, GetTablesResponse, TableField, TableMetadata } from "@google-cloud/bigquery";
+import {
+  BigQuery,
+  BigQueryOptions,
+  GetTablesResponse,
+  TableField,
+  TableMetadata,
+} from "@google-cloud/bigquery";
+import { AuthClient, gaxios, GoogleAuth, Impersonated } from "google-auth-library";
 import Long from "long";
 import { PromisePoolExecutor } from "promise-pool-executor";
 
@@ -9,7 +16,7 @@ import {
   IDbClient,
   IExecutionResult,
   IExecutionResultRaw,
-  OnCancel
+  OnCancel,
 } from "df/cli/api/dbadapters/index";
 import { parseBigqueryEvalError } from "df/cli/api/utils/error_parsing";
 import { LimitedResultSet } from "df/cli/api/utils/results";
@@ -17,13 +24,14 @@ import { coerceAsError } from "df/common/errors/errors";
 import { retry } from "df/common/promises";
 import { dataform } from "df/protos/ts";
 
+const CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 const EXTRA_GOOGLE_SCOPES = ["https://www.googleapis.com/auth/drive"];
 
 const BIGQUERY_DATE_RELATED_FIELDS = [
   "BigQueryDate",
   "BigQueryTime",
   "BigQueryTimestamp",
-  "BigQueryDatetime"
+  "BigQueryDatetime",
 ];
 
 const BIGQUERY_INTERNAL_ERROR_JOB_MAX_ATTEMPTS = 3;
@@ -39,21 +47,111 @@ export interface IBigQueryExecutionOptions {
 
 export type BigQueryClientProvider = (projectId?: string) => BigQuery;
 
+/**
+ * An AuthClient that delegates to a client resolved only when it's needed, e.g. Application Default
+ * Credentials from `GoogleAuth.getClient()` (which caches the resolved client). This allows an
+ * impersonated client to be created synchronously.
+ */
+export class DeferredAuthClient extends AuthClient {
+  constructor(
+    private readonly resolveClient: () => Promise<AuthClient>,
+    universeDomain?: string,
+  ) {
+    // Impersonated reads the source client's universe at construction time, before this
+    // client is resolved, and rejects a mismatch. Keep them on the same universe.
+    super(universeDomain ? { universeDomain } : undefined);
+  }
+
+  public async getAccessToken(): Promise<{
+    token?: string | null;
+    res?: gaxios.GaxiosResponse | null;
+  }> {
+    return (await this.resolveClient()).getAccessToken();
+  }
+
+  public async getRequestHeaders(url?: string | URL): Promise<Headers> {
+    return (await this.resolveClient()).getRequestHeaders(url);
+  }
+
+  public async request<T>(options: gaxios.GaxiosOptions): gaxios.GaxiosPromise<T> {
+    return (await this.resolveClient()).request<T>(options);
+  }
+}
+
+/** Creates a client that impersonates `targetPrincipal`, authenticating with `sourceClient`. */
+export function createImpersonatedClient(
+  targetPrincipal: string,
+  sourceClient: AuthClient,
+  universeDomain?: string,
+): Impersonated {
+  return new Impersonated({
+    sourceClient,
+    targetPrincipal,
+    targetScopes: [CLOUD_PLATFORM_SCOPE, ...EXTRA_GOOGLE_SCOPES],
+    // Unset inherits the source client's universe (googleapis.com by default). An explicit
+    // value must match sourceClient.universeDomain or Impersonated throws.
+    ...(universeDomain ? { universeDomain } : {}),
+  });
+}
+
+/**
+ * Returns a client that impersonates `credentials.impersonateServiceAccount`, or undefined if it
+ * isn't set. The service account key in `credentials.credentials`, or Application Default
+ * Credentials if it's empty, is used as the source credentials.
+ */
+export function createAuthClient(credentials: dataform.IBigQuery): AuthClient | undefined {
+  if (!credentials.impersonateServiceAccount) {
+    return undefined;
+  }
+  // Empty string is the proto default; omit it so auth stays on googleapis.com.
+  const universeDomain = credentials.universeDomain || undefined;
+  const sourceAuth = new GoogleAuth({
+    credentials: credentials.credentials && JSON.parse(credentials.credentials),
+    scopes: [CLOUD_PLATFORM_SCOPE],
+    universeDomain,
+  });
+  return createImpersonatedClient(
+    credentials.impersonateServiceAccount,
+    new DeferredAuthClient(() => sourceAuth.getClient(), universeDomain),
+    universeDomain,
+  );
+}
+
+/**
+ * Builds the BigQuery client options for the given credentials. When `credentials.credentials`
+ * (a service account key) is empty, the client authenticates with Application Default Credentials.
+ * When `authClient` is given (see `createAuthClient()`), the client authenticates with it instead.
+ */
+export function getBigQueryClientOptions(
+  credentials: dataform.IBigQuery,
+  projectId?: string,
+  authClient?: AuthClient,
+): BigQueryOptions {
+  return {
+    projectId: projectId || credentials.projectId,
+    scopes: EXTRA_GOOGLE_SCOPES,
+    // Unset proto string fields read as "", which BigQuery rejects as a job location. Pass
+    // undefined instead so that BigQuery auto-selects the location.
+    location: credentials.location || undefined,
+    universeDomain: credentials.universeDomain || undefined,
+    ...(authClient
+      ? { authClient }
+      : { credentials: credentials.credentials && JSON.parse(credentials.credentials) }),
+  };
+}
+
 export function createBigQueryClientProvider(
-  credentials: dataform.IBigQuery
+  credentials: dataform.IBigQuery,
 ): BigQueryClientProvider {
   const clients = new Map<string, BigQuery>();
+  // Shared by the clients of all projects, so that they reuse the same impersonated token.
+  const authClient = createAuthClient(credentials);
   return (projectId?: string) => {
     projectId = projectId || credentials.projectId;
     if (!clients.has(projectId)) {
       clients.set(
         projectId,
-        new BigQuery({
-          projectId,
-          scopes: EXTRA_GOOGLE_SCOPES,
-          location: credentials.location,
-          credentials: credentials.credentials && JSON.parse(credentials.credentials)
-        })
+        new BigQuery(getBigQueryClientOptions(credentials, projectId, authClient)),
       );
     }
     return clients.get(projectId);
@@ -70,7 +168,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
     options?: {
       concurrencyLimit?: number;
       clientProvider?: BigQueryClientProvider;
-    }
+    },
   ) {
     this.bigQueryCredentials = credentials;
     this.clientProvider = options?.clientProvider || createBigQueryClientProvider(credentials);
@@ -80,7 +178,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
     this.pool = new PromisePoolExecutor({
       concurrencyLimit: options?.concurrencyLimit,
       frequencyWindow: 1000,
-      frequencyLimit: 30
+      frequencyLimit: 30,
     });
   }
 
@@ -93,7 +191,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
       rowLimit?: number;
       byteLimit?: number;
       bigquery?: IBigQueryExecutionOptions;
-    } = { interactive: false, rowLimit: 1000, byteLimit: 1024 * 1024 }
+    } = { interactive: false, rowLimit: 1000, byteLimit: 1024 * 1024 },
   ): Promise<IExecutionResult> {
     if (options?.interactive && options?.bigquery?.labels) {
       throw new Error("BigQuery job labels may not be set for interactive queries.");
@@ -107,24 +205,24 @@ export class BigQueryDbAdapter implements IDbAdapter {
         generator: () =>
           options?.interactive
             ? this.runQuery(
-              statement,
-              options?.params,
-              options?.rowLimit,
-              options?.byteLimit,
-              options.bigquery?.location
-            )
+                statement,
+                options?.params,
+                options?.rowLimit,
+                options?.byteLimit,
+                options.bigquery?.location,
+              )
             : this.createQueryJob(
-              statement,
-              options?.params,
-              options?.rowLimit,
-              options?.byteLimit,
-              options?.onCancel,
-              options?.bigquery?.labels,
-              options?.bigquery?.location,
-              options?.bigquery?.jobPrefix,
-              options?.bigquery?.dryRun,
-              options?.bigquery?.reservation
-            )
+                statement,
+                options?.params,
+                options?.rowLimit,
+                options?.byteLimit,
+                options?.onCancel,
+                options?.bigquery?.labels,
+                options?.bigquery?.location,
+                options?.bigquery?.jobPrefix,
+                options?.bigquery?.dryRun,
+                options?.bigquery?.reservation,
+              ),
       })
       .promise();
   }
@@ -135,7 +233,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
       params?: { [name: string]: any };
       rowLimit?: number;
       bigquery?: IBigQueryExecutionOptions;
-    } = { rowLimit: 1000 }
+    } = { rowLimit: 1000 },
   ): Promise<IExecutionResultRaw> {
     if (!statement) {
       throw new Error("Query string cannot be empty");
@@ -144,12 +242,17 @@ export class BigQueryDbAdapter implements IDbAdapter {
       .addSingleTask({
         generator: async () => {
           const [rows, , apiResponse] = await this.getClient().query({
-            ...this.prepareQueryOptions(statement, options.rowLimit, options.bigquery, options.params),
-            skipParsing: true
+            ...this.prepareQueryOptions(
+              statement,
+              options.rowLimit,
+              options.bigquery,
+              options.params,
+            ),
+            skipParsing: true,
           } as any);
           const schema = apiResponse?.schema?.fields?.map((field: any) => convertField(field));
           return { rows, schema, metadata: {} };
-        }
+        },
       })
       .promise();
   }
@@ -166,24 +269,24 @@ export class BigQueryDbAdapter implements IDbAdapter {
                 this.getClient().query({
                   useLegacySql: false,
                   query,
-                  dryRun: true
-                })
+                  dryRun: true,
+                }),
             })
             .promise();
           return dataform.QueryEvaluation.create({
             status: dataform.QueryEvaluation.QueryEvaluationStatus.SUCCESS,
             incremental,
-            query
+            query,
           });
         } catch (e) {
           return {
             status: dataform.QueryEvaluation.QueryEvaluationStatus.FAILURE,
             error: parseBigqueryEvalError(e),
             incremental,
-            query
+            query,
           };
         }
-      })
+      }),
     );
   }
 
@@ -192,23 +295,23 @@ export class BigQueryDbAdapter implements IDbAdapter {
     const tablesMetadata: dataform.ITableMetadata[] = [];
 
     await Promise.all(
-      datasetIds.map(async datasetId => {
+      datasetIds.map(async (datasetId) => {
         const [tables] = await this.getClient(database)
           .dataset(datasetId)
           .getTables({ autoPaginate: true, maxResults: 1000 });
         await Promise.all(
-          tables.map(async table => {
+          tables.map(async (table) => {
             const metadata = await this.table({
               database,
               schema: datasetId,
-              name: table.id
+              name: table.id,
             });
             if (metadata) {
               tablesMetadata.push(metadata);
             }
-          })
+          }),
         );
-      })
+      }),
     );
 
     return tablesMetadata;
@@ -216,30 +319,33 @@ export class BigQueryDbAdapter implements IDbAdapter {
 
   public async search(
     searchText: string,
-    options: { limit: number } = { limit: 1000 }
+    options: { limit: number; location?: string } = { limit: 1000 },
   ): Promise<dataform.ITableMetadata[]> {
+    const location = options.location || this.bigQueryCredentials.location || "US";
     const results = await this.execute(
       `select table_catalog, table_schema, table_name
-       from region-${this.bigQueryCredentials.location}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS
+       from region-${location}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS
        where regexp_contains(table_schema, @searchText) or regexp_contains(table_name, @searchText) or regexp_contains(field_path, @searchText)
        group by 1, 2, 3`,
       {
         params: {
-          searchText: `(?i)${searchText}`
+          searchText: `(?i)${searchText}`,
         },
         interactive: true,
-        rowLimit: options.limit
-      }
+        rowLimit: options.limit,
+        bigquery: { location },
+      },
     );
-    return await Promise.all(
-      results.rows.map(row =>
+    const tables = await Promise.all(
+      results.rows.map((row) =>
         this.table({
           database: row.table_catalog,
           schema: row.table_schema,
-          name: row.table_name
-        })
-      )
+          name: row.table_name,
+        }),
+      ),
     );
+    return tables.filter((table) => Boolean(table));
   }
 
   public async table(target: dataform.ITarget): Promise<dataform.ITableMetadata> {
@@ -258,12 +364,12 @@ export class BigQueryDbAdapter implements IDbAdapter {
       const metadataTarget = {
         database: metadata.tableReference.projectId,
         schema: metadata.tableReference.datasetId,
-        name: metadata.tableReference.tableId
+        name: metadata.tableReference.tableId,
       };
       throw new Error(
         `Target ${JSON.stringify(metadataTarget)} does not match requested target ${JSON.stringify(
-          target
-        )}.`
+          target,
+        )}.`,
       );
     }
 
@@ -275,13 +381,13 @@ export class BigQueryDbAdapter implements IDbAdapter {
             ? dataform.TableMetadata.Type.VIEW
             : dataform.TableMetadata.Type.UNKNOWN,
       target,
-      fields: metadata.schema.fields?.map(field => convertField(field)),
+      fields: metadata.schema.fields?.map((field) => convertField(field)),
       lastUpdatedMillis: Long.fromString(metadata.lastModifiedTime),
       description: metadata.description,
       labels: metadata.labels,
       bigquery: {
-        hasStreamingBuffer: !!metadata.streamingBuffer
-      }
+        hasStreamingBuffer: !!metadata.streamingBuffer,
+      },
     });
   }
 
@@ -293,14 +399,17 @@ export class BigQueryDbAdapter implements IDbAdapter {
   }
 
   public async schemas(database: string): Promise<string[]> {
-    const data = await this.getClient(database).getDatasets({ autoPaginate: true, maxResults: 1000 });
-    return data[0].map(dataset => dataset.id);
+    const data = await this.getClient(database).getDatasets({
+      autoPaginate: true,
+      maxResults: 1000,
+    });
+    return data[0].map((dataset) => dataset.id);
   }
 
-  public async createSchema(database: string, schema: string): Promise<void> {
+  public async createSchema(database: string, schema: string, location?: string): Promise<void> {
     await this.execute(
       `create schema if not exists \`${database || this.bigQueryCredentials.projectId}.${schema}\``,
-      { bigquery: { location: this.bigQueryCredentials.location || "US" } }
+      { bigquery: { location: location || this.bigQueryCredentials.location || "US" } },
     );
   }
 
@@ -310,17 +419,14 @@ export class BigQueryDbAdapter implements IDbAdapter {
     const metadata = await this.getMetadata(target);
     const schemaWithDescription = addDescriptionToMetadata(
       actionDescriptor.columns,
-      metadata.schema.fields
+      metadata.schema.fields,
     );
 
-    await this.getClient(target.database)
-      .dataset(target.schema)
-      .table(target.name)
-      .setMetadata({
-        description: actionDescriptor.description,
-        schema: schemaWithDescription,
-        labels: actionDescriptor.bigqueryLabels
-      });
+    await this.getClient(target.database).dataset(target.schema).table(target.name).setMetadata({
+      description: actionDescriptor.description,
+      schema: schemaWithDescription,
+      labels: actionDescriptor.bigqueryLabels,
+    });
   }
 
   private async getMetadata(target: dataform.ITarget): Promise<TableMetadata> {
@@ -349,21 +455,21 @@ export class BigQueryDbAdapter implements IDbAdapter {
     params?: { [name: string]: any },
     rowLimit?: number,
     byteLimit?: number,
-    location?: string
+    location?: string,
   ): Promise<IExecutionResult> {
     const results = await new Promise<any[]>((resolve, reject) => {
       const allRows = new LimitedResultSet({
         rowLimit,
-        byteLimit
+        byteLimit,
       });
       const stream = this.getClient().createQueryStream({
         query,
         params,
-        location
+        location,
       });
       stream
-        .on("error", e => reject(coerceAsError(e)))
-        .on("data", row => {
+        .on("error", (e) => reject(coerceAsError(e)))
+        .on("data", (row) => {
           if (!allRows.push(row)) {
             stream.end();
           }
@@ -379,7 +485,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
     query: string,
     rowLimit?: number,
     bigqueryOptions?: IBigQueryExecutionOptions,
-    params?: { [name: string]: any }
+    params?: { [name: string]: any },
   ) {
     return {
       query,
@@ -390,7 +496,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
       labels: bigqueryOptions?.labels,
       dryRun: bigqueryOptions?.dryRun,
       reservation: bigqueryOptions?.reservation,
-      params
+      params,
     };
   }
 
@@ -404,7 +510,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
     location?: string,
     jobPrefix?: string,
     dryRun?: boolean,
-    reservation?: string
+    reservation?: string,
   ): Promise<IExecutionResult> {
     let isCancelled = false;
     onCancel?.(() => (isCancelled = true));
@@ -421,10 +527,10 @@ export class BigQueryDbAdapter implements IDbAdapter {
                 location,
                 jobPrefix,
                 dryRun,
-                reservation
+                reservation,
               },
-              params
-            ) as any
+              params,
+            ) as any,
           );
           const resultStream = job[0].getQueryResultsStream();
           return new Promise<IExecutionResult>((resolve, reject) => {
@@ -440,7 +546,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
 
             const results = new LimitedResultSet({
               rowLimit,
-              byteLimit
+              byteLimit,
             });
             resultStream
               .on("error", async (e: IBigQueryError) => {
@@ -463,7 +569,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
                 }
                 reject(e);
               })
-              .on("data", row => {
+              .on("data", (row) => {
                 if (!results.push(row)) {
                   resultStream.end();
                 }
@@ -487,8 +593,8 @@ export class BigQueryDbAdapter implements IDbAdapter {
                         totalBytesProcessed: jobMetadata.statistics.query.totalBytesProcessed
                           ? Long.fromString(jobMetadata.statistics.query.totalBytesProcessed)
                           : Long.ZERO,
-                      }
-                    }
+                      },
+                    },
                   });
                 } catch (e) {
                   reject(e);
@@ -500,7 +606,7 @@ export class BigQueryDbAdapter implements IDbAdapter {
         }
       },
       BIGQUERY_INTERNAL_ERROR_JOB_MAX_ATTEMPTS,
-      e => e.message?.includes("Retrying the job may solve the problem")
+      (e) => e.message?.includes("Retrying the job may solve the problem"),
     );
   }
 }
@@ -512,13 +618,15 @@ function cleanRows(rows: any[]) {
 
   const sampleData = rows[0];
   const fieldsWithBigQueryDates = Object.keys(sampleData).filter(
-    key =>
+    (key) =>
       sampleData[key] &&
       sampleData[key].constructor &&
-      BIGQUERY_DATE_RELATED_FIELDS.includes(sampleData[key].constructor.name)
+      BIGQUERY_DATE_RELATED_FIELDS.includes(sampleData[key].constructor.name),
   );
-  fieldsWithBigQueryDates.forEach(dateField => {
-    rows.forEach(row => (row[dateField] = row[dateField] ? row[dateField].value : row[dateField]));
+  fieldsWithBigQueryDates.forEach((dateField) => {
+    rows.forEach(
+      (row) => (row[dateField] = row[dateField] ? row[dateField].value : row[dateField]),
+    );
   });
   return rows;
 }
@@ -527,11 +635,11 @@ function convertField(field: TableField): dataform.IField {
   const result: dataform.IField = {
     name: field.name,
     flags: field.mode === "REPEATED" ? [dataform.Field.Flag.REPEATED] : [],
-    description: field.description
+    description: field.description,
   };
   if (field.type === "RECORD" || field.type === "STRUCT") {
     result.struct = dataform.Fields.create({
-      fields: field.fields.map(innerField => convertField(innerField))
+      fields: field.fields.map((innerField) => convertField(innerField)),
     });
   } else {
     result.primitive = convertFieldType(field.type);
@@ -583,13 +691,13 @@ function convertFieldType(type: string) {
 
 function addDescriptionToMetadata(
   columnDescriptions: dataform.IColumnDescriptor[],
-  metadataArray: TableField[]
+  metadataArray: TableField[],
 ): TableField[] {
   if (!columnDescriptions) {
     return metadataArray;
   }
   const findDescription = (path: string[]) =>
-    columnDescriptions.find(column => column.path.join("") === path.join(""));
+    columnDescriptions.find((column) => column.path.join("") === path.join(""));
 
   const mapDescriptionToMetadata = (metadata: TableField, path: string[]) => {
     const description = findDescription(path);
@@ -597,22 +705,22 @@ function addDescriptionToMetadata(
       metadata.description = description.description;
       if (description.bigqueryPolicyTags?.length > 0) {
         metadata.policyTags = {
-          names: description.bigqueryPolicyTags
+          names: description.bigqueryPolicyTags,
         };
       }
     }
 
     if (metadata.fields) {
-      metadata.fields = metadata.fields.map(nestedMetadata =>
-        mapDescriptionToMetadata(nestedMetadata, [...path, nestedMetadata.name])
+      metadata.fields = metadata.fields.map((nestedMetadata) =>
+        mapDescriptionToMetadata(nestedMetadata, [...path, nestedMetadata.name]),
       );
     }
 
     return metadata;
   };
 
-  const newMetadata = metadataArray.map(metaItem =>
-    mapDescriptionToMetadata(metaItem, [metaItem.name])
+  const newMetadata = metadataArray.map((metaItem) =>
+    mapDescriptionToMetadata(metaItem, [metaItem.name]),
   );
   return newMetadata;
 }
@@ -623,7 +731,7 @@ function createBigQueryError(jobMetadata: any): IBigQueryError {
     error.metadata = {
       bigquery: {
         jobId: jobMetadata.jobReference.jobId,
-      }
+      },
     };
   }
   return error;

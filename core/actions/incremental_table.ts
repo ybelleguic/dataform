@@ -5,9 +5,14 @@ import {
   ILegacyBigQueryOptions,
   ILegacyTableConfig,
   LegacyConfigConverter,
-  TableType
+  TableType,
 } from "df/core/actions";
 import { Assertion } from "df/core/actions/assertion";
+import {
+  validateLakehouseBigQueryOptions,
+  validateLakehouseColumns,
+  validateLakehouseConfig,
+} from "df/core/actions/lakehouse";
 import { JitTableResult, Table } from "df/core/actions/table";
 import { View } from "df/core/actions/view";
 import { ColumnDescriptors } from "df/core/column_descriptors";
@@ -98,7 +103,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     type: "incremental",
     enumType: dataform.TableType.INCREMENTAL,
     disabled: false,
-    tags: []
+    tags: [],
   });
 
   /** @hidden */
@@ -121,19 +126,33 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       return;
     }
 
+    const hasDatasetOrSchema = Boolean(unverifiedConfig.dataset || unverifiedConfig.schema);
     const config = this.verifyConfig(unverifiedConfig);
 
     if (!config.name) {
       config.name = Path.basename(config.filename);
     }
-    const target = actionConfigToCompiledGraphTarget(config);
-    this.proto.target = this.applySessionToTarget(target, session.projectConfig, config.filename, {
-      validateTarget: true
+    const fileName = configPath
+      ? resolveActionsConfigFilename(config.filename, configPath)
+      : config.filename;
+    this.isLakehouseTarget = validateLakehouseConfig(session, config, fileName, hasDatasetOrSchema);
+    const target = actionConfigToCompiledGraphTarget(
+      config,
+      session.projectConfig?.defaultLakehouseConfig,
+    );
+    this.proto.target = this.applySessionToTarget(target, session.projectConfig, fileName, {
+      validateTarget: true,
     });
-    this.proto.canonicalTarget = this.applySessionToTarget(target, session.canonicalProjectConfig);
+    this.proto.canonicalTarget = this.applySessionToTarget(
+      actionConfigToCompiledGraphTarget(
+        config,
+        session.canonicalProjectConfig?.defaultLakehouseConfig,
+      ),
+      session.canonicalProjectConfig,
+    );
 
     if (configPath) {
-      config.filename = resolveActionsConfigFilename(config.filename, configPath);
+      config.filename = fileName;
       this.query(nativeRequire(config.filename).query);
     }
     if (config.filename) {
@@ -145,9 +164,12 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     }
     if (config.dependencyTargets) {
       this.dependencies(
-        config.dependencyTargets.map(dependencyTarget =>
-          configTargetToCompiledGraphTarget(dataform.ActionConfig.Target.create(dependencyTarget))
-        )
+        config.dependencyTargets.map((dependencyTarget) =>
+          configTargetToCompiledGraphTarget(
+            dataform.ActionConfig.Target.create(dependencyTarget),
+            session.projectConfig?.defaultLakehouseConfig,
+          ),
+        ),
       );
     }
     if (config.hermetic !== undefined) {
@@ -170,15 +192,15 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     }
     if (config.columns?.length) {
       this.columns(
-        config.columns.map(columnDescriptor =>
-          dataform.ActionConfig.ColumnDescriptor.create(columnDescriptor)
-        )
+        config.columns.map((columnDescriptor) =>
+          dataform.ActionConfig.ColumnDescriptor.create(columnDescriptor),
+        ),
       );
     }
     if (config.project) {
       this.database(config.project);
     }
-    if (config.dataset) {
+    if (config.dataset && !config.lakehouse) {
       this.schema(config.dataset);
     }
     if (config.assertions) {
@@ -203,20 +225,36 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       requirePartitionFilter: config.requirePartitionFilter,
       additionalOptions: config.additionalOptions,
       incrementalPredicates: config.incrementalPredicates,
-      preserveGovernanceControls: config.preserveGovernanceControls ?? session.projectConfig.preserveGovernanceControls ?? false,
-      ...(config.iceberg ? {
-        connection: getConnectionForIcebergTable(
-          config.iceberg.connection,
-          session.projectConfig.defaultIcebergConfig?.connection
-        ),
-        fileFormat: getFileFormatValueForIcebergTable(config.iceberg.fileFormat?.toString()),
-        tableFormat: dataform.TableFormat.ICEBERG,
-        storageUri: getStorageUriForIcebergTable(
-          getEffectiveBucketName(session.projectConfig.defaultIcebergConfig?.bucketName, config.iceberg.bucketName),
-          getEffectiveTableFolderRoot(session.projectConfig.defaultIcebergConfig?.tableFolderRoot, config.iceberg.tableFolderRoot),
-          getEffectiveTableFolderSubpath(this.proto.target.schema, this.proto.target.name, session.projectConfig.defaultIcebergConfig?.tableFolderSubpath, config.iceberg.tableFolderSubpath),
-        ),
-      } : {}),
+      preserveGovernanceControls:
+        config.preserveGovernanceControls ??
+        session.projectConfig.preserveGovernanceControls ??
+        false,
+      ...(config.iceberg && !config.lakehouse
+        ? {
+            connection: getConnectionForIcebergTable(
+              config.iceberg.connection,
+              session.projectConfig.defaultIcebergConfig?.connection,
+            ),
+            fileFormat: getFileFormatValueForIcebergTable(config.iceberg.fileFormat?.toString()),
+            tableFormat: dataform.TableFormat.ICEBERG,
+            storageUri: getStorageUriForIcebergTable(
+              getEffectiveBucketName(
+                session.projectConfig.defaultIcebergConfig?.bucketName,
+                config.iceberg.bucketName,
+              ),
+              getEffectiveTableFolderRoot(
+                session.projectConfig.defaultIcebergConfig?.tableFolderRoot,
+                config.iceberg.tableFolderRoot,
+              ),
+              getEffectiveTableFolderSubpath(
+                this.proto.target.schema,
+                this.proto.target.name,
+                session.projectConfig.defaultIcebergConfig?.tableFolderSubpath,
+                config.iceberg.tableFolderSubpath,
+              ),
+            ),
+          }
+        : {}),
     });
     this.proto.onSchemaChange = this.mapOnSchemaChange(config.onSchemaChange);
     this.proto.incrementalStrategy = this.mapIncrementalStrategy(config.incrementalStrategy);
@@ -246,7 +284,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
         newAction = new Table(
           this.session,
           { ...this.unverifiedConfig, type: "table" },
-          this.configPath
+          this.configPath,
         );
         break;
       case "incremental":
@@ -255,7 +293,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
         newAction = new View(
           this.session,
           { ...this.unverifiedConfig, type: "view" },
-          this.configPath
+          this.configPath,
         );
         break;
       default:
@@ -264,7 +302,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     const existingAction = this.session.actions.indexOf(this);
     if (existingAction === -1) {
       throw Error(
-        "Expected pre-existing action, but none found. Please report this to the Dataform team."
+        "Expected pre-existing action, but none found. Please report this to the Dataform team.",
       );
     }
     this.session.actions[existingAction] = newAction;
@@ -288,7 +326,8 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     if (!this.proto.actionDescriptor) {
       this.proto.actionDescriptor = {};
     }
-    this.proto.actionDescriptor.compilationMode = dataform.ActionCompilationMode.ACTION_COMPILATION_MODE_JIT;
+    this.proto.actionDescriptor.compilationMode =
+      dataform.ActionCompilationMode.ACTION_COMPILATION_MODE_JIT;
     this.contextableJitCode = jitCode;
     return this;
   }
@@ -340,7 +379,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
    */
   public disabled(disabled = true) {
     this.proto.disabled = disabled;
-    this.uniqueKeyAssertions.forEach(assertion => assertion.disabled(disabled));
+    this.uniqueKeyAssertions.forEach((assertion) => assertion.disabled(disabled));
     this.rowConditionsAssertion?.disabled(disabled);
     return this;
   }
@@ -399,8 +438,8 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
    */
   public dependencies(value: Resolvable | Resolvable[]) {
     const newDependencies = Array.isArray(value) ? value : [value];
-    newDependencies.forEach(resolvable =>
-      this.proto.dependencyTargets.push(checkAssertionsForDependency(this, resolvable))
+    newDependencies.forEach((resolvable) =>
+      this.proto.dependencyTargets.push(checkAssertionsForDependency(this, resolvable)),
     );
     return this;
   }
@@ -427,10 +466,10 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
    */
   public tags(value: string | string[]) {
     const newTags = typeof value === "string" ? [value] : value;
-    newTags.forEach(t => {
+    newTags.forEach((t) => {
       this.proto.tags.push(t);
     });
-    this.uniqueKeyAssertions.forEach(assertion => assertion.tags(value));
+    this.uniqueKeyAssertions.forEach((assertion) => assertion.tags(value));
     this.rowConditionsAssertion?.tags(value);
     return this;
   }
@@ -459,9 +498,8 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     if (!this.proto.actionDescriptor) {
       this.proto.actionDescriptor = {};
     }
-    this.proto.actionDescriptor.columns = ColumnDescriptors.mapConfigProtoToCompilationProto(
-      columns
-    );
+    this.proto.actionDescriptor.columns =
+      ColumnDescriptors.mapConfigProtoToCompilationProto(columns);
     return this;
   }
 
@@ -477,7 +515,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       dataform.Target.create({ ...this.proto.target, database }),
       this.session.projectConfig,
       this.proto.fileName,
-      { validateTarget: true }
+      { validateTarget: true },
     );
     return this;
   }
@@ -489,11 +527,19 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
    * Sets the schema (BigQuery dataset) in which to create the output of this action.
    */
   public schema(schema: string) {
+    if (this.isLakehouseTarget) {
+      this.session.compileError(
+        new Error("Cannot specify both 'lakehouse' and 'dataset'/'schema' on the same action."),
+        this.proto.fileName,
+        this.proto.target,
+      );
+      return this;
+    }
     this.proto.target = this.applySessionToTarget(
       dataform.Target.create({ ...this.proto.target, schema }),
       this.session.projectConfig,
       this.proto.fileName,
-      { validateTarget: true }
+      { validateTarget: true },
     );
     return this;
   }
@@ -509,8 +555,16 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
    * needed -->
    */
   public assertions(
-    tableAssertionsConfig: dataform.ActionConfig.TableAssertionsConfig
+    tableAssertionsConfig: dataform.ActionConfig.TableAssertionsConfig,
   ): IncrementalTable {
+    if (this.isLakehouseTarget) {
+      this.session.compileError(
+        new Error("Inline assertions are not supported for Lakehouse (4-part) targets"),
+        this.proto.fileName,
+        this.proto.target,
+      );
+      return this;
+    }
     const inlineAssertions = this.generateInlineAssertions(tableAssertionsConfig, this.proto);
     this.uniqueKeyAssertions = inlineAssertions.uniqueKeyAssertions;
     this.rowConditionsAssertion = inlineAssertions.rowConditionsAssertion;
@@ -547,7 +601,6 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       this.compileAot();
     }
 
-
     if (this.proto.bigquery?.connection) {
       validateConnectionFormat(this.proto.bigquery.connection);
     }
@@ -556,10 +609,25 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       validateStorageUriFormat(this.proto.bigquery.storageUri);
     }
 
+    if (this.isLakehouseTarget) {
+      validateLakehouseColumns(
+        this.session,
+        this.proto.actionDescriptor,
+        this.proto.fileName,
+        this.proto.target,
+      );
+      validateLakehouseBigQueryOptions(
+        this.session,
+        this.proto.bigquery,
+        this.proto.fileName,
+        this.proto.target,
+      );
+    }
+
     return verifyObjectMatchesProto(
       dataform.Table,
       this.proto,
-      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM
+      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM,
     );
   }
 
@@ -570,7 +638,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       this.contextableQuery,
       this.contextableWhere,
       this.contextablePostOps,
-      this.contextablePreOps
+      this.contextablePreOps,
     );
 
     if (!this.proto.actionDescriptor) {
@@ -595,10 +663,10 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     }
 
     this.proto.preOps = this.contextifyOps(this.contextablePreOps, context).filter(
-      op => !!op.trim()
+      (op) => !!op.trim(),
     );
     this.proto.postOps = this.contextifyOps(this.contextablePostOps, context).filter(
-      op => !!op.trim()
+      (op) => !!op.trim(),
     );
 
     validateQueryString(this.session, this.proto.query, this.proto.fileName);
@@ -608,10 +676,10 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
   /** @hidden */
   private contextifyOps(
     contextableOps: Array<Contextable<ITableContext, string | string[]>>,
-    currentContext: IncrementalTableContext
+    currentContext: IncrementalTableContext,
   ) {
     let protoOps: string[] = [];
-    contextableOps.forEach(contextableOp => {
+    contextableOps.forEach((contextableOp) => {
       const appliedOps = currentContext.apply(contextableOp);
       protoOps = protoOps.concat(typeof appliedOps === "string" ? [appliedOps] : appliedOps);
     });
@@ -626,7 +694,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
   private verifyConfig(
     // `any` is used here to facilitate the type merging of the legacy table config, which is very
     // different to the new structure.
-    unverifiedConfig: dataform.ActionConfig.IncrementalTableConfig | ILegacyTableConfig | any
+    unverifiedConfig: dataform.ActionConfig.IncrementalTableConfig | ILegacyTableConfig | any,
   ): dataform.ActionConfig.IncrementalTableConfig {
     // The "type" field only exists on legacy incremental table configs. Here we convert them to the
     // new format.
@@ -634,7 +702,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       delete unverifiedConfig.type;
       if (unverifiedConfig.dependencies) {
         unverifiedConfig.dependencyTargets = unverifiedConfig.dependencies.map(
-          (dependency: string | object) => resolvableAsActionConfigTarget(dependency)
+          (dependency: string | object) => resolvableAsActionConfigTarget(dependency),
         );
         delete unverifiedConfig.dependencies;
       }
@@ -652,15 +720,13 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
       }
       if (unverifiedConfig.columns) {
         unverifiedConfig.columns = ColumnDescriptors.mapLegacyObjectToConfigProto(
-          unverifiedConfig.columns as any
+          unverifiedConfig.columns as any,
         );
       }
-      unverifiedConfig = LegacyConfigConverter.insertLegacyInlineAssertionsToConfigProto(
-        unverifiedConfig
-      );
-      unverifiedConfig = LegacyConfigConverter.insertLegacyBigQueryOptionsToConfigProto(
-        unverifiedConfig
-      );
+      unverifiedConfig =
+        LegacyConfigConverter.insertLegacyInlineAssertionsToConfigProto(unverifiedConfig);
+      unverifiedConfig =
+        LegacyConfigConverter.insertLegacyBigQueryOptionsToConfigProto(unverifiedConfig);
       if (unverifiedConfig.bigquery) {
         checkExcessProperties(
           (e: Error) => {
@@ -676,19 +742,19 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
             "requirePartitionFilter",
             "additionalOptions",
             "incrementalPredicates",
-            "iceberg"
+            "iceberg",
           ]),
-          "BigQuery table config"
+          "BigQuery table config",
         );
       }
     }
     if (unverifiedConfig.iceberg) {
       if (
         unverifiedConfig.iceberg.fileFormat &&
-        unverifiedConfig.iceberg.fileFormat.toUpperCase() !== 'PARQUET'
+        unverifiedConfig.iceberg.fileFormat.toUpperCase() !== "PARQUET"
       ) {
         throw new ReferenceError(
-          `Unexpected file format; only "PARQUET" is allowed, got "${unverifiedConfig.iceberg.fileFormat}".`
+          `Unexpected file format; only "PARQUET" is allowed, got "${unverifiedConfig.iceberg.fileFormat}".`,
         );
       }
     }
@@ -696,7 +762,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     const config = verifyObjectMatchesProto(
       dataform.ActionConfig.IncrementalTableConfig,
       unverifiedConfig,
-      VerifyProtoErrorBehaviour.SHOW_DOCS_LINK
+      VerifyProtoErrorBehaviour.SHOW_DOCS_LINK,
     );
 
     if (config.additionalOptions) {
@@ -745,7 +811,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
   }
 
   private mapIncrementalStrategy(
-    incrementalStrategy?: string | number
+    incrementalStrategy?: string | number,
   ): dataform.IncrementalStrategy {
     if (!incrementalStrategy) {
       return dataform.IncrementalStrategy.INCREMENTAL_STRATEGY_UNSPECIFIED;
@@ -776,14 +842,16 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     }
   }
 
-  private checkIncrementalStrategyRequirements(config: dataform.ActionConfig.IIncrementalTableConfig) {
+  private checkIncrementalStrategyRequirements(
+    config: dataform.ActionConfig.IIncrementalTableConfig,
+  ) {
     switch (this.proto.incrementalStrategy) {
       case dataform.IncrementalStrategy.INSERT_OVERWRITE:
         if (!this.proto.bigquery || !this.proto.bigquery.partitionBy) {
           this.session.compileError(
             new Error(`IncrementalStrategy 'insert_overwrite' requires 'partitionBy' to be set`),
             config.filename,
-            this.proto.target
+            this.proto.target,
           );
         }
         break;
@@ -792,7 +860,7 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
           this.session.compileError(
             new Error(`IncrementalStrategy 'merge' requires 'uniqueKey' to be set`),
             config.filename,
-            this.proto.target
+            this.proto.target,
           );
         }
         break;
@@ -810,10 +878,10 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
     ) {
       this.session.compileError(
         new Error(
-          `incrementalPredicates and updatePartitionFilter cannot be both set. Use only incrementalPredicates.`
+          `incrementalPredicates and updatePartitionFilter cannot be both set. Use only incrementalPredicates.`,
         ),
         config.filename,
-        this.proto.target
+        this.proto.target,
       );
     }
   }
@@ -823,7 +891,10 @@ export class IncrementalTable extends ActionBuilder<dataform.Table> {
  * @hidden
  */
 export class IncrementalTableContext implements ITableContext {
-  constructor(private incrementalTable: IncrementalTable, private isIncremental = false) { }
+  constructor(
+    private incrementalTable: IncrementalTable,
+    private isIncremental = false,
+  ) {}
 
   public self(): string {
     return this.resolve(this.incrementalTable.getTarget());
@@ -835,7 +906,9 @@ export class IncrementalTableContext implements ITableContext {
 
   public ref(ref: Resolvable | string[], ...rest: string[]): string {
     ref = toResolvable(ref, rest);
-    if (!resolvableAsTarget(ref)) {
+    if (
+      !resolvableAsTarget(ref, this.incrementalTable.session.projectConfig?.defaultLakehouseConfig)
+    ) {
       this.incrementalTable.session.compileError(new Error(`Action name is not specified`));
       return "";
     }
@@ -854,13 +927,13 @@ export class IncrementalTableContext implements ITableContext {
   public database(): string {
     if (!this.incrementalTable.getTarget().database) {
       this.incrementalTable.session.compileError(
-        new Error(`Warehouse does not support multiple databases`)
+        new Error(`Warehouse does not support multiple databases`),
       );
       return "";
     }
 
     return this.incrementalTable.session.finalizeDatabase(
-      this.incrementalTable.getTarget().database
+      this.incrementalTable.getTarget().database,
     );
   }
 

@@ -1,5 +1,4 @@
 import { ChildProcess } from "child_process";
-import * as path from "path";
 
 import { BaseWorker } from "df/cli/api/commands/base_worker";
 import { handleDbRequest } from "df/cli/api/commands/jit/rpc";
@@ -28,7 +27,7 @@ export class JitCompileChildProcess extends BaseWorker<
     dbclient: IDbClient,
     timeoutMillis?: number,
     options?: IBigQueryExecutionOptions,
-    onCancel?: (cancel: () => void) => void
+    onCancel?: (cancel: () => void) => void,
   ): Promise<dataform.IJitCompilationResponse> {
     return await new JitCompileChildProcess().run(
       request,
@@ -37,12 +36,8 @@ export class JitCompileChildProcess extends BaseWorker<
       dbclient,
       timeoutMillis || DEFAULT_COMPILATION_TIMEOUT_MILLIS,
       options,
-      onCancel
+      onCancel,
     );
-  }
-
-  constructor() {
-    super(path.resolve(__dirname, "../../../vm/jit_loader"));
   }
 
   private async run(
@@ -52,15 +47,15 @@ export class JitCompileChildProcess extends BaseWorker<
     dbclient: IDbClient,
     timeoutMillis: number,
     options: IBigQueryExecutionOptions | undefined,
-    onCancel: ((cancel: () => void) => void) | undefined
+    onCancel: ((cancel: () => void) => void) | undefined,
   ): Promise<dataform.IJitCompilationResponse> {
     return await this.runWorker(
       timeoutMillis,
-      child => {
+      (child) => {
         child.send({
           type: "jit_compile",
           request,
-          projectDir
+          projectDir,
         });
       },
       async (message, child, resolve, reject) => {
@@ -72,7 +67,7 @@ export class JitCompileChildProcess extends BaseWorker<
           reject(new Error(message.error));
         }
       },
-      onCancel
+      onCancel,
     );
   }
 
@@ -81,7 +76,7 @@ export class JitCompileChildProcess extends BaseWorker<
     child: ChildProcess,
     dbadapter: IDbAdapter,
     dbclient: IDbClient,
-    options?: IBigQueryExecutionOptions
+    options?: IBigQueryExecutionOptions,
   ) {
     try {
       const response = await handleDbRequest(
@@ -89,20 +84,20 @@ export class JitCompileChildProcess extends BaseWorker<
         dbclient,
         message.method,
         message.request,
-        options
+        options,
       );
       child.send({
         type: "rpc_response",
         correlationId: message.correlationId,
         // Convert to plain array — child.send uses JSON IPC by default, which
         // serializes Uint8Array as {"0":n,...} and Buffer.from() rejects that.
-        response: response ? Array.from(response) : response
+        response: response ? Array.from(response) : response,
       });
     } catch (e) {
       child.send({
         type: "rpc_response",
         correlationId: message.correlationId,
-        error: e.message
+        error: e.message,
       });
     }
   }

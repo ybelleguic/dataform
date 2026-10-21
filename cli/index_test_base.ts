@@ -6,47 +6,35 @@ import * as path from "path";
 import { Logger } from "df/cli/console";
 import { version } from "df/core/version";
 import { dataform } from "df/protos/ts";
-import { corePackageTarPath, getProcessResult, nodePath, npmPath, writeDefinitionFile } from "df/testing";
+import {
+  corePackageTarPath,
+  getProcessResult,
+  nodePath,
+  npmPath,
+  writeDefinitionFile,
+} from "df/testing";
+import { readTestCredentialsConfig, resolveCredentialsPath } from "df/testing/credentials";
 import { TmpDirFixture } from "df/testing/fixtures";
 
 const DEFAULT_PROJECT = "dataform-open-source";
 const DEFAULT_LOCATION = "US";
 
-const runfilesDir = process.env.RUNFILES;
-let workspaceName = "df";
-if (!fs.existsSync(path.resolve(runfilesDir, "df"))) {
-  workspaceName = "_main";
-}
-
-export const CREDENTIALS_PATH = path.resolve(runfilesDir, workspaceName, "test_credentials/bigquery.json");
+export const CREDENTIALS_PATH = resolveCredentialsPath();
 
 const logger = new Logger(true);
+const initialCredentialsConfig = readTestCredentialsConfig(CREDENTIALS_PATH);
 
 function getCredentialsProjectId(): string {
-  try {
-    if (fs.existsSync(CREDENTIALS_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf8"));
-      if (parsed?.projectId) {
-        return parsed.projectId;
-      }
-    }
-  } catch (e) {
-    // Fall back to default
+  if (initialCredentialsConfig?.projectId) {
+    return initialCredentialsConfig.projectId;
   }
   logger.log(`Project name not specified; defaulting to ${DEFAULT_PROJECT}`);
   return DEFAULT_PROJECT;
 }
 
 function getCredentialsLocation(): string {
-  try {
-    if (fs.existsSync(CREDENTIALS_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf8"));
-      if (parsed?.location) {
-        return parsed.location;
-      }
-    }
-  } catch (e) {
-    // Fall back to default
+  if (initialCredentialsConfig?.location) {
+    return initialCredentialsConfig.location;
   }
   logger.log(`Location not specified; defaulting to ${DEFAULT_LOCATION}`);
   return DEFAULT_LOCATION;
@@ -56,12 +44,12 @@ export const INTEGRATION_TEST_PROJECT = getCredentialsProjectId();
 export const INTEGRATION_TEST_LOCATION = getCredentialsLocation();
 export const INTEGRATION_TEST_RESERVATION = `projects/${INTEGRATION_TEST_PROJECT}/locations/${INTEGRATION_TEST_LOCATION.toLowerCase()}/reservations/dataform-test`;
 
-export const cliEntryPointPath = "cli/node_modules/@dataform/cli/bundle.js";
+export const cliEntryPointPath = path.resolve("packages/@dataform/cli/bundle.js");
 
 export async function setupProject(
   tmpDirFixture: TmpDirFixture,
   projectDir: string,
-  workflowSettingsOverrides?: Partial<dataform.IWorkflowSettings>
+  workflowSettingsOverrides?: Partial<dataform.IWorkflowSettings>,
 ): Promise<string> {
   const npmCacheDir = tmpDirFixture.createNewTmpDir();
   const workflowSettingsPath = path.join(projectDir, "workflow_settings.yaml");
@@ -72,13 +60,13 @@ export async function setupProject(
 
   // Install packages manually to get around bazel read-only sandbox issues.
   const workflowSettings = dataform.WorkflowSettings.create({
-    ...loadYaml(fs.readFileSync(workflowSettingsPath, "utf8")) as dataform.IWorkflowSettings,
-    ...workflowSettingsOverrides
+    ...(loadYaml(fs.readFileSync(workflowSettingsPath, "utf8")) as dataform.IWorkflowSettings),
+    ...workflowSettingsOverrides,
   });
   delete workflowSettings.dataformCoreVersion;
   fs.writeFileSync(
     workflowSettingsPath,
-    dumpYaml(dataform.WorkflowSettings.toObject(workflowSettings, { enums: String }))
+    dumpYaml(dataform.WorkflowSettings.toObject(workflowSettings, { enums: String })),
   );
   fs.writeFileSync(
     packageJsonPath,
@@ -86,7 +74,7 @@ export async function setupProject(
   "dependencies":{
     "@dataform/core": "${version}"
   }
-}`
+}`,
   );
   await getProcessResult(
     execFile(npmPath, [
@@ -95,8 +83,8 @@ export async function setupProject(
       projectDir,
       "--cache",
       npmCacheDir,
-      corePackageTarPath
-    ])
+      corePackageTarPath,
+    ]),
   );
 
   return projectDir;
@@ -105,42 +93,43 @@ export async function setupProject(
 export async function runCli(
   cmd: string,
   options: string[] = [],
-  execOptions?: ExecFileOptions
+  execOptions?: ExecFileOptions,
 ): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
 }> {
   const args = [cliEntryPointPath, cmd, ...options];
-  return getProcessResult(
-    execFile(nodePath, args, execOptions)
-  );
+  return getProcessResult(execFile(nodePath, args, execOptions));
 }
 
 export function alterWorkflowSettings(
   projectDir: string,
-  workflowSettingsOverrides: Partial<dataform.IWorkflowSettings>
+  workflowSettingsOverrides: Partial<dataform.IWorkflowSettings>,
 ): void {
   const workflowSettingsPath = path.join(projectDir, "workflow_settings.yaml");
-  const existingSettings = loadYaml(fs.readFileSync(workflowSettingsPath, "utf8")) as dataform.IWorkflowSettings;
+  const existingSettings = loadYaml(
+    fs.readFileSync(workflowSettingsPath, "utf8"),
+  ) as dataform.IWorkflowSettings;
   const workflowSettings = dataform.WorkflowSettings.create({
     ...existingSettings,
-    ...workflowSettingsOverrides
+    ...workflowSettingsOverrides,
   });
   fs.writeFileSync(
     workflowSettingsPath,
-    dumpYaml(dataform.WorkflowSettings.toObject(workflowSettings, { enums: String }))
+    dumpYaml(dataform.WorkflowSettings.toObject(workflowSettings, { enums: String })),
   );
 }
 
 export async function setupJitProject(
   tmpDirFixture: TmpDirFixture,
-  projectDir: string
+  projectDir: string,
+  workflowSettingsOverrides?: Partial<dataform.IWorkflowSettings>,
 ): Promise<void> {
-  await setupProject(tmpDirFixture, projectDir);
+  await setupProject(tmpDirFixture, projectDir, workflowSettingsOverrides);
   writeDefinitionFile(
     projectDir,
     "jit_table.js",
-    `publish("jit_table", {type: "table"}).jitCode(async (ctx) => { return "SELECT 1 as id"; })`
+    `publish("jit_table", {type: "table"}).jitCode(async (ctx) => { return "SELECT 1 as id"; })`,
   );
 }

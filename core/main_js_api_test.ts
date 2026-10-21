@@ -1,4 +1,6 @@
 import { expect } from "chai";
+import * as fs from "fs";
+import * as path from "path";
 
 import { dataform, google } from "df/protos/ts";
 import {
@@ -6,28 +8,28 @@ import {
   suite,
   test,
   writeDefinitionFile,
-  writeWorkflowSettingsFile
+  writeWorkflowSettingsFile,
 } from "df/testing";
 import { TmpDirFixture } from "df/testing/fixtures";
 import {
   coreExecutionRequestFromPath,
   runMainInVm,
   VALID_WORKFLOW_SETTINGS_YAML,
-  WorkflowSettingsTemplates
+  WorkflowSettingsTemplates,
 } from "df/testing/run_core";
 
 suite("javascript API", ({ afterEach }) => {
   const tmpDirFixture = new TmpDirFixture(afterEach);
   suite("publish", () => {
-    ["table", "view", "incremental"].forEach(tableType => {
+    ["table", "view", "incremental"].forEach((tableType) => {
       [
         WorkflowSettingsTemplates.bigqueryWithDefaultProjectAndDataset,
         {
           ...WorkflowSettingsTemplates.bigqueryWithDatasetSuffix,
-          defaultProject: "defaultProject"
+          defaultProject: "defaultProject",
         },
-        { ...WorkflowSettingsTemplates.bigqueryWithNamePrefix, defaultProject: "defaultProject" }
-      ].forEach(projectConfig => {
+        { ...WorkflowSettingsTemplates.bigqueryWithNamePrefix, defaultProject: "defaultProject" },
+      ].forEach((projectConfig) => {
         test(
           `publish for table type ${tableType}, with project suffix ` +
             `'${projectConfig.projectSuffix}', dataset suffix ` +
@@ -45,7 +47,7 @@ publish("name", {
   .preOps(_ => ["pre_op"])
   .postOps(_ => ["post_op"])
   .database("otherProject")
-  .schema("otherDataset")`
+  .schema("otherDataset")`,
             );
 
             const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -63,12 +65,12 @@ publish("name", {
                     schema: projectConfig.datasetSuffix
                       ? `otherDataset_${projectConfig.datasetSuffix}`
                       : "otherDataset",
-                    name: projectConfig.namePrefix ? `${projectConfig.namePrefix}_name` : "name"
+                    name: projectConfig.namePrefix ? `${projectConfig.namePrefix}_name` : "name",
                   },
                   canonicalTarget: {
                     database: projectConfig.defaultProject,
                     schema: projectConfig.defaultDataset,
-                    name: "name"
+                    name: "name",
                   },
                   disabled: false,
                   enumType: tableType.toUpperCase(),
@@ -83,13 +85,13 @@ publish("name", {
                         incrementalQuery: "SELECT 1",
                         incrementalStrategy: "INCREMENTAL_STRATEGY_UNSPECIFIED",
                         protected: false,
-                        onSchemaChange: "IGNORE"
+                        onSchemaChange: "IGNORE",
                       }
-                    : {})
-                }
-              ])
+                    : {}),
+                },
+              ]),
             );
-          }
+          },
         );
       });
 
@@ -103,7 +105,7 @@ publish("name", {
 config {
   hasOutput: true
 }
-SELECT 1`
+SELECT 1`,
         );
         writeDefinitionFile(
           projectDir,
@@ -111,7 +113,7 @@ SELECT 1`
           `
 publish("name", {
   type: "${tableType}",
-}).query(ctx => \`SELECT * FROM \${ctx.ref('operation')}\`)`
+}).query(ctx => \`SELECT * FROM \${ctx.ref('operation')}\`)`,
         );
 
         const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -122,14 +124,14 @@ publish("name", {
             canonicalTarget: {
               database: "defaultProject",
               name: "name",
-              schema: "defaultDataset"
+              schema: "defaultDataset",
             },
             dependencyTargets: [
               {
                 database: "defaultProject",
                 name: "operation",
-                schema: "defaultDataset"
-              }
+                schema: "defaultDataset",
+              },
             ],
             disabled: false,
             enumType: tableType.toUpperCase(),
@@ -139,7 +141,7 @@ publish("name", {
             target: {
               database: "defaultProject",
               name: "name",
-              schema: "defaultDataset"
+              schema: "defaultDataset",
             },
             type: tableType,
             ...(tableType === "incremental"
@@ -147,10 +149,10 @@ publish("name", {
                   incrementalQuery: "SELECT * FROM `defaultProject.defaultDataset.operation`",
                   incrementalStrategy: "INCREMENTAL_STRATEGY_UNSPECIFIED",
                   protected: false,
-                  onSchemaChange: "IGNORE"
+                  onSchemaChange: "IGNORE",
                 }
-              : {})
-          }
+              : {}),
+          },
         ]);
       });
 
@@ -165,7 +167,7 @@ publish("name", {
 publish("name", {
   type: "incremental",
 }).query(_ => "SELECT 1")
-  .protected()`
+  .protected()`,
           );
 
           const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -176,7 +178,7 @@ publish("name", {
               canonicalTarget: {
                 database: "defaultProject",
                 name: "name",
-                schema: "defaultDataset"
+                schema: "defaultDataset",
               },
               disabled: false,
               enumType: tableType.toUpperCase(),
@@ -186,14 +188,14 @@ publish("name", {
               target: {
                 database: "defaultProject",
                 name: "name",
-                schema: "defaultDataset"
+                schema: "defaultDataset",
               },
               type: tableType,
               incrementalQuery: "SELECT 1",
               protected: true,
               onSchemaChange: "IGNORE",
-              incrementalStrategy: "INCREMENTAL_STRATEGY_UNSPECIFIED"
-            }
+              incrementalStrategy: "INCREMENTAL_STRATEGY_UNSPECIFIED",
+            },
           ]);
         });
       }
@@ -205,10 +207,10 @@ publish("name", {
       WorkflowSettingsTemplates.bigqueryWithDefaultProjectAndDataset,
       {
         ...WorkflowSettingsTemplates.bigqueryWithDatasetSuffix,
-        defaultProject: "defaultProject"
+        defaultProject: "defaultProject",
       },
-      { ...WorkflowSettingsTemplates.bigqueryWithNamePrefix, defaultProject: "defaultProject" }
-    ].forEach(projectConfig => {
+      { ...WorkflowSettingsTemplates.bigqueryWithNamePrefix, defaultProject: "defaultProject" },
+    ].forEach((projectConfig) => {
       test(
         `operate with project suffix ` +
           `'${projectConfig.projectSuffix}', dataset suffix ` +
@@ -224,7 +226,7 @@ operate("name", {
   type: "operations",
 }).queries(_ => ["SELECT 1", "SELECT 2"])
   .database("otherProject")
-  .schema("otherDataset")`
+  .schema("otherDataset")`,
           );
 
           const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -240,20 +242,20 @@ operate("name", {
                   schema: projectConfig.datasetSuffix
                     ? `otherDataset_${projectConfig.datasetSuffix}`
                     : "otherDataset",
-                  name: projectConfig.namePrefix ? `${projectConfig.namePrefix}_name` : "name"
+                  name: projectConfig.namePrefix ? `${projectConfig.namePrefix}_name` : "name",
                 },
                 canonicalTarget: {
                   database: projectConfig.defaultProject,
                   schema: projectConfig.defaultDataset,
-                  name: "name"
+                  name: "name",
                 },
                 fileName: "definitions/operate.js",
                 hermeticity: "NON_HERMETIC",
-                queries: ["SELECT 1", "SELECT 2"]
-              }
-            ])
+                queries: ["SELECT 1", "SELECT 2"],
+              },
+            ]),
           );
-        }
+        },
       );
     });
 
@@ -267,7 +269,7 @@ operate("name", {
         `
 operate("name", {
   type: "operations",
-}).queries(ctx => [\`SELECT * FROM \${ctx.ref('table')}\`])`
+}).queries(ctx => [\`SELECT * FROM \${ctx.ref('table')}\`])`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -278,14 +280,14 @@ operate("name", {
           canonicalTarget: {
             database: "defaultProject",
             name: "name",
-            schema: "defaultDataset"
+            schema: "defaultDataset",
           },
           dependencyTargets: [
             {
               database: "defaultProject",
               name: "table",
-              schema: "defaultDataset"
-            }
+              schema: "defaultDataset",
+            },
           ],
           fileName: "definitions/operate.js",
           hermeticity: "NON_HERMETIC",
@@ -293,9 +295,9 @@ operate("name", {
           target: {
             database: "defaultProject",
             name: "name",
-            schema: "defaultDataset"
-          }
-        }
+            schema: "defaultDataset",
+          },
+        },
       ]);
     });
   });
@@ -305,10 +307,10 @@ operate("name", {
       WorkflowSettingsTemplates.bigqueryWithDefaultProjectAndDataset,
       {
         ...WorkflowSettingsTemplates.bigqueryWithDatasetSuffix,
-        defaultProject: "defaultProject"
+        defaultProject: "defaultProject",
       },
-      { ...WorkflowSettingsTemplates.bigqueryWithNamePrefix, defaultProject: "defaultProject" }
-    ].forEach(projectConfig => {
+      { ...WorkflowSettingsTemplates.bigqueryWithNamePrefix, defaultProject: "defaultProject" },
+    ].forEach((projectConfig) => {
       test(
         `assert with project suffix ` +
           `'${projectConfig.projectSuffix}', dataset suffix ` +
@@ -324,7 +326,7 @@ assert("name", {
   type: "operations",
 }).query(_ => "SELECT 1")
   .database("otherProject")
-  .schema("otherDataset")`
+  .schema("otherDataset")`,
           );
 
           const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -340,19 +342,19 @@ assert("name", {
                   schema: projectConfig.datasetSuffix
                     ? `otherDataset_${projectConfig.datasetSuffix}`
                     : "otherDataset",
-                  name: projectConfig.namePrefix ? `${projectConfig.namePrefix}_name` : "name"
+                  name: projectConfig.namePrefix ? `${projectConfig.namePrefix}_name` : "name",
                 },
                 canonicalTarget: {
                   database: projectConfig.defaultProject,
                   schema: projectConfig.defaultDataset,
-                  name: "name"
+                  name: "name",
                 },
                 fileName: "definitions/assert.js",
-                query: "SELECT 1"
-              }
-            ])
+                query: "SELECT 1",
+              },
+            ]),
           );
-        }
+        },
       );
     });
 
@@ -366,7 +368,7 @@ assert("name", {
         `
 assert("name", {
   type: "assert",
-}).query(ctx => \`SELECT * FROM \${ctx.ref('table')}\`)`
+}).query(ctx => \`SELECT * FROM \${ctx.ref('table')}\`)`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -377,23 +379,23 @@ assert("name", {
           canonicalTarget: {
             database: "defaultProject",
             name: "name",
-            schema: "defaultDataset"
+            schema: "defaultDataset",
           },
           dependencyTargets: [
             {
               database: "defaultProject",
               name: "table",
-              schema: "defaultDataset"
-            }
+              schema: "defaultDataset",
+            },
           ],
           fileName: "definitions/assert.js",
           query: "SELECT * FROM `defaultProject.defaultDataset.table`",
           target: {
             database: "defaultProject",
             name: "name",
-            schema: "defaultDataset"
-          }
-        }
+            schema: "defaultDataset",
+          },
+        },
       ]);
     });
 
@@ -404,7 +406,7 @@ assert("name", {
         projectDir,
         "assert.js",
         `
-assert("name").jitCode(ctx => "jit");`
+assert("name").jitCode(ctx => "jit");`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -413,21 +415,21 @@ assert("name").jitCode(ctx => "jit");`
       expect(asPlainObject(result.compile.compiledGraph.assertions)).deep.equals([
         {
           actionDescriptor: {
-            compilationMode: "ACTION_COMPILATION_MODE_JIT"
+            compilationMode: "ACTION_COMPILATION_MODE_JIT",
           },
           canonicalTarget: {
             database: "defaultProject",
             name: "name",
-            schema: "defaultDataset"
+            schema: "defaultDataset",
           },
           fileName: "definitions/assert.js",
           jitCode: 'ctx => "jit"',
           target: {
             database: "defaultProject",
             name: "name",
-            schema: "defaultDataset"
-          }
-        }
+            schema: "defaultDataset",
+          },
+        },
       ]);
     });
 
@@ -438,13 +440,13 @@ assert("name").jitCode(ctx => "jit");`
         projectDir,
         "assert.js",
         `
-assert("name").query("SELECT 1").jitCode(ctx => "jit");`
+assert("name").query("SELECT 1").jitCode(ctx => "jit");`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(
-        result.compile.compiledGraph.graphErrors.compilationErrors?.map(error => error.message)
+        result.compile.compiledGraph.graphErrors.compilationErrors?.map((error) => error.message),
       ).deep.equals(["Assertion may set either .jitCode() or .query(), but not both."]);
     });
 
@@ -458,14 +460,14 @@ assert("name").query("SELECT 1").jitCode(ctx => "jit");`
         `
 assert("name", {
   type: "assert",
-}).query(ctx => \`SELECT * FROM \${ctx.ref('table')}\`)`
+}).query(ctx => \`SELECT * FROM \${ctx.ref('table')}\`)`,
       );
 
       const coreRequest = coreExecutionRequestFromPath(
         projectDir,
         dataform.ProjectConfig.create({
-          disableAssertions: true
-        })
+          disableAssertions: true,
+        }),
       );
       const result = runMainInVm(coreRequest);
 
@@ -476,14 +478,14 @@ assert("name", {
             canonicalTarget: {
               database: "defaultProject",
               name: "name",
-              schema: "defaultDataset"
+              schema: "defaultDataset",
             },
             dependencyTargets: [
               {
                 database: "defaultProject",
                 name: "table",
-                schema: "defaultDataset"
-              }
+                schema: "defaultDataset",
+              },
             ],
             disabled: true,
             fileName: "definitions/assert.js",
@@ -491,10 +493,10 @@ assert("name", {
             target: {
               database: "defaultProject",
               name: "name",
-              schema: "defaultDataset"
-            }
-          }
-        ])
+              schema: "defaultDataset",
+            },
+          },
+        ]),
       );
       expect(result.compile.compiledGraph.tables.length).equals(1);
     });
@@ -522,7 +524,7 @@ dataform.jitData("key", {
   ],
   "null": null,
   "undef": undefined,
-});`
+});`,
       );
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
@@ -539,30 +541,30 @@ dataform.jitData("key", {
                   struct: google.protobuf.Value.create({
                     structValue: google.protobuf.Struct.create({
                       fields: {
-                        nestedKey: google.protobuf.Value.create({ stringValue: "nestedValue" })
-                      }
-                    })
+                        nestedKey: google.protobuf.Value.create({ stringValue: "nestedValue" }),
+                      },
+                    }),
                   }),
                   list: google.protobuf.Value.create({
                     listValue: google.protobuf.ListValue.create({
                       values: [
                         google.protobuf.Value.create({ stringValue: "a" }),
                         google.protobuf.Value.create({ stringValue: "b" }),
-                        google.protobuf.Value.create({ stringValue: "c" })
-                      ]
-                    })
+                        google.protobuf.Value.create({ stringValue: "c" }),
+                      ],
+                    }),
                   }),
                   null: google.protobuf.Value.create({
-                    nullValue: google.protobuf.NullValue.NULL_VALUE
+                    nullValue: google.protobuf.NullValue.NULL_VALUE,
                   }),
                   undef: google.protobuf.Value.create({
-                    nullValue: google.protobuf.NullValue.NULL_VALUE
-                  })
-                }
-              })
-            })
-          }
-        })
+                    nullValue: google.protobuf.NullValue.NULL_VALUE,
+                  }),
+                },
+              }),
+            }),
+          },
+        }),
       );
     });
 
@@ -575,12 +577,12 @@ dataform.jitData("key", {
         `
 dataform.jitData("key", 1);
 dataform.jitData("key", 2);
-`
+`,
       );
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(
-        result.compile.compiledGraph.graphErrors.compilationErrors.map(e => e.message)
+        result.compile.compiledGraph.graphErrors.compilationErrors.map((e) => e.message),
       ).to.deep.equal(["JiT context data with key key already exists."]);
     });
 
@@ -592,12 +594,12 @@ dataform.jitData("key", 2);
         "jit.js",
         `
 dataform.jitData("key", {test: () => {}});
-`
+`,
       );
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(
-        result.compile.compiledGraph.graphErrors.compilationErrors.map(e => e.message)
+        result.compile.compiledGraph.graphErrors.compilationErrors.map((e) => e.message),
       ).to.deep.equal(["Unsupported value: () => {}"]);
     });
   });
@@ -613,13 +615,36 @@ dataform.jitData("key", {test: () => {}});
             type: "table",
             description: getContents('./descriptions.md'),
           }
-            SELECT 1 AS test`
+            SELECT 1 AS test`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(result.compile.compiledGraph.tables[0].actionDescriptor.description).to.equal(
-        `# This table contains data about`
+        `# This table contains data about`,
+      );
+    });
+
+    test("getContents resolves parent-relative paths that remain inside rootDir", () => {
+      const projectDir = tmpDirFixture.createNewTmpDir();
+      writeWorkflowSettingsFile(projectDir, VALID_WORKFLOW_SETTINGS_YAML);
+      fs.mkdirSync(path.join(projectDir, "docs"));
+      fs.writeFileSync(path.join(projectDir, "docs", "descriptions.md"), "# Shared description");
+      writeDefinitionFile(
+        projectDir,
+        "table.sqlx",
+        `config {
+            type: "table",
+            description: getContents('../docs/descriptions.md'),
+          }
+            SELECT 1 AS test`,
+      );
+
+      const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
+
+      expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
+      expect(result.compile.compiledGraph.tables[0].actionDescriptor.description).to.equal(
+        `# Shared description`,
       );
     });
 
@@ -633,13 +658,13 @@ dataform.jitData("key", {test: () => {}});
             type: "table",
             description: getContents('./nonexistent.md'),
           }
-            SELECT 1 AS test`
+            SELECT 1 AS test`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(result.compile.compiledGraph.graphErrors.compilationErrors[0].message).to.include(
-        "nonexistent.md"
+        "nonexistent.md",
       );
     });
 
@@ -653,13 +678,39 @@ dataform.jitData("key", {test: () => {}});
             type: "table",
             description: getContents('../../description.md'),
           }
-            SELECT 1 AS test`
+            SELECT 1 AS test`,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(result.compile.compiledGraph.graphErrors.compilationErrors[0].message).to.include(
-        "outside the project directory"
+        "outside the project directory",
+      );
+    });
+
+    test("throws error for a sibling directory differing only by case", () => {
+      // With root ".../Proj", "../../proj/secret.md" must not be readable on case-sensitive
+      // file systems, even though it would be the same directory on Windows.
+      const parentDir = tmpDirFixture.createNewTmpDir();
+      const projectDir = path.join(parentDir, "Proj");
+      fs.mkdirSync(projectDir);
+      fs.mkdirSync(path.join(parentDir, "proj"));
+      fs.writeFileSync(path.join(parentDir, "proj", "secret.md"), "secret");
+      writeWorkflowSettingsFile(projectDir, VALID_WORKFLOW_SETTINGS_YAML);
+      writeDefinitionFile(
+        projectDir,
+        "table.sqlx",
+        `config {
+            type: "table",
+            description: getContents('../../proj/secret.md'),
+          }
+            SELECT 1 AS test`,
+      );
+
+      const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
+
+      expect(result.compile.compiledGraph.graphErrors.compilationErrors[0].message).to.include(
+        "outside the project directory",
       );
     });
   });
@@ -675,7 +726,7 @@ publish("name", {
     partitionBy: "some_partition"
   }
 })`,
-        expectedError: "partitionBy/clusterBy can be applied only to materialized views"
+        expectedError: "partitionBy/clusterBy can be applied only to materialized views",
       },
       {
         testName: "clusterBy invalid for BigQuery non-materialized views",
@@ -687,7 +738,7 @@ publish("name", {
     clusterBy: ["some_cluster"]
   }
 })`,
-        expectedError: "partitionBy/clusterBy can be applied only to materialized views"
+        expectedError: "partitionBy/clusterBy can be applied only to materialized views",
       },
       {
         testName: "partitionExpirationDays invalid for BigQuery views",
@@ -699,7 +750,7 @@ publish("name", {
   }
 })`,
         expectedError:
-          'Unexpected property "partitionExpirationDays" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]'
+          'Unexpected property "partitionExpirationDays" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]',
       },
       {
         testName: "requirePartitionFilter invalid for BigQuery views",
@@ -711,7 +762,7 @@ publish("name", {
   }
 })`,
         expectedError:
-          'Unexpected property "requirePartitionFilter" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]'
+          'Unexpected property "requirePartitionFilter" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]',
       },
       {
         testName: "partitionExpirationDays invalid for BigQuery materialized views",
@@ -724,7 +775,7 @@ publish("name", {
   }
 })`,
         expectedError:
-          'Unexpected property "partitionExpirationDays" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]'
+          'Unexpected property "partitionExpirationDays" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]',
       },
       {
         testName: "requirePartitionFilter invalid for BigQuery materialized views",
@@ -737,7 +788,7 @@ publish("name", {
   }
 })`,
         expectedError:
-          'Unexpected property "requirePartitionFilter" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]'
+          'Unexpected property "requirePartitionFilter" in BigQuery view config. Supported properties are: ["labels","additionalOptions","partitionBy","clusterBy"]',
       },
       {
         testName: "materialized invalid for BigQuery tables",
@@ -747,7 +798,7 @@ publish("name", {
   materialized: true,
 })`,
         expectedError:
-          'Unexpected property "materialized", or property value type of "boolean" is incorrect. See https://dataform-co.github.io/dataform/docs/configs-reference#dataform-ActionConfig-TableConfig for allowed properties.'
+          'Unexpected property "materialized", or property value type of "boolean" is incorrect. See https://dataform-co.github.io/dataform/docs/configs-reference#dataform-ActionConfig-TableConfig for allowed properties.',
       },
       {
         testName: "partitionExpirationDays invalid for BigQuery tables",
@@ -759,7 +810,7 @@ publish("name", {
   }
 })`,
         expectedError:
-          "requirePartitionFilter/partitionExpirationDays are not valid for non partitioned BigQuery tables"
+          "requirePartitionFilter/partitionExpirationDays are not valid for non partitioned BigQuery tables",
       },
       {
         testName: "duplicate partitionExpirationDays is invalid",
@@ -774,7 +825,7 @@ publish("name", {
     }
   }
 })`,
-        expectedError: "partitionExpirationDays has been declared twice"
+        expectedError: "partitionExpirationDays has been declared twice",
       },
       {
         testName: "duplicate requirePartitionFilter is invalid",
@@ -789,9 +840,9 @@ publish("name", {
     }
   }
 })`,
-        expectedError: "requirePartitionFilter has been declared twice"
-      }
-    ].forEach(testParameters => {
+        expectedError: "requirePartitionFilter has been declared twice",
+      },
+    ].forEach((testParameters) => {
       test(testParameters.testName, () => {
         const projectDir = tmpDirFixture.createNewTmpDir();
         writeWorkflowSettingsFile(projectDir, VALID_WORKFLOW_SETTINGS_YAML);
@@ -802,27 +853,27 @@ publish("name", {
 
         expect(
           result.compile.compiledGraph.graphErrors.compilationErrors.map(
-            compilationError => compilationError.message
-          )
+            (compilationError) => compilationError.message,
+          ),
         ).deep.equals([testParameters.expectedError]);
       });
     });
   });
 
   suite(`legacy publish().type() can still be called`, () => {
-    ["table", "incremental", "view"].forEach(fromType => {
-      ["table", "incremental", "view"].forEach(toType => {
+    ["table", "incremental", "view"].forEach((fromType) => {
+      ["table", "incremental", "view"].forEach((toType) => {
         test(`from type ${fromType} to ${toType}`, () => {
           const projectDir = tmpDirFixture.createNewTmpDir();
           writeWorkflowSettingsFile(
             projectDir,
-            WorkflowSettingsTemplates.bigqueryWithDefaultProjectAndDataset
+            WorkflowSettingsTemplates.bigqueryWithDefaultProjectAndDataset,
           );
           writeDefinitionFile(
             projectDir,
             "publish.js",
             `
-publish("name", {type: "${fromType}", schema: "schemaOverride"}).type("${toType}")`
+publish("name", {type: "${fromType}", schema: "schemaOverride"}).type("${toType}")`,
           );
 
           const result = runMainInVm(coreExecutionRequestFromPath(projectDir));

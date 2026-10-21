@@ -1,5 +1,6 @@
 import { verifyObjectMatchesProto, VerifyProtoErrorBehaviour } from "df/common/protos";
 import { ActionBuilder } from "df/core/actions";
+import { validateLakehouseColumns, validateLakehouseConfig } from "df/core/actions/lakehouse";
 import { ColumnDescriptors } from "df/core/column_descriptors";
 import { Session } from "df/core/session";
 import { actionConfigToCompiledGraphTarget } from "df/core/utils";
@@ -77,28 +78,43 @@ export class Declaration extends ActionBuilder<dataform.Declaration> {
       return;
     }
 
+    const hasDatasetOrSchema = Boolean(unverifiedConfig.dataset || unverifiedConfig.schema);
     const config = this.verifyConfig(unverifiedConfig);
 
     if (!config.name) {
       throw Error("Declarations must have a populated 'name' field.");
     }
 
-    const target = actionConfigToCompiledGraphTarget(config);
-    this.proto.target = this.applySessionToTarget(
-      target,
-      session.projectConfig,
-      config.filename || filename
+    const resolvedFilename = config.filename || filename;
+    this.isLakehouseTarget = validateLakehouseConfig(
+      session,
+      config,
+      resolvedFilename,
+      hasDatasetOrSchema,
     );
-    this.proto.canonicalTarget = this.applySessionToTarget(target, session.canonicalProjectConfig);
+    const target = actionConfigToCompiledGraphTarget(
+      config,
+      session.projectConfig?.defaultLakehouseConfig,
+    );
+    this.proto.target = this.applySessionToTarget(target, session.projectConfig, resolvedFilename, {
+      validateTarget: this.isLakehouseTarget,
+    });
+    this.proto.canonicalTarget = this.applySessionToTarget(
+      actionConfigToCompiledGraphTarget(
+        config,
+        session.canonicalProjectConfig?.defaultLakehouseConfig,
+      ),
+      session.canonicalProjectConfig,
+    );
 
     if (config.description) {
       this.description(config.description);
     }
     if (config.columns?.length) {
       this.columns(
-        config.columns.map(columnDescriptor =>
-          dataform.ActionConfig.ColumnDescriptor.create(columnDescriptor)
-        )
+        config.columns.map((columnDescriptor) =>
+          dataform.ActionConfig.ColumnDescriptor.create(columnDescriptor),
+        ),
       );
     }
     this.proto.fileName = config.filename || filename;
@@ -130,9 +146,8 @@ export class Declaration extends ActionBuilder<dataform.Declaration> {
     if (!this.proto.actionDescriptor) {
       this.proto.actionDescriptor = {};
     }
-    this.proto.actionDescriptor.columns = ColumnDescriptors.mapConfigProtoToCompilationProto(
-      columns
-    );
+    this.proto.actionDescriptor.columns =
+      ColumnDescriptors.mapConfigProtoToCompilationProto(columns);
     return this;
   }
 
@@ -148,10 +163,18 @@ export class Declaration extends ActionBuilder<dataform.Declaration> {
 
   /** @hidden */
   public compile() {
+    if (this.isLakehouseTarget) {
+      validateLakehouseColumns(
+        this.session,
+        this.proto.actionDescriptor,
+        this.proto.fileName,
+        this.proto.target,
+      );
+    }
     return verifyObjectMatchesProto(
       dataform.Declaration,
       this.proto,
-      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM
+      VerifyProtoErrorBehaviour.SUGGEST_REPORTING_TO_DATAFORM_TEAM,
     );
   }
 
@@ -161,7 +184,7 @@ export class Declaration extends ActionBuilder<dataform.Declaration> {
    * converted to the new structure.
    */
   private verifyConfig(
-    unverifiedConfig: ILegacyDeclarationConfig
+    unverifiedConfig: ILegacyDeclarationConfig,
   ): dataform.ActionConfig.DeclarationConfig {
     if (unverifiedConfig.database) {
       unverifiedConfig.project = unverifiedConfig.database;
@@ -173,7 +196,7 @@ export class Declaration extends ActionBuilder<dataform.Declaration> {
     }
     if (unverifiedConfig.columns) {
       unverifiedConfig.columns = ColumnDescriptors.mapLegacyObjectToConfigProto(
-        unverifiedConfig.columns as any
+        unverifiedConfig.columns as any,
       );
     }
 
@@ -184,7 +207,7 @@ export class Declaration extends ActionBuilder<dataform.Declaration> {
     return verifyObjectMatchesProto(
       dataform.ActionConfig.DeclarationConfig,
       unverifiedConfig,
-      VerifyProtoErrorBehaviour.SHOW_DOCS_LINK
+      VerifyProtoErrorBehaviour.SHOW_DOCS_LINK,
     );
   }
 }
