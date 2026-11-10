@@ -32,4 +32,30 @@ suite("workflowSettingsAsProjectConfig", () => {
 
     expect(projectConfig.lineageEnabled).to.equal(false);
   });
+
+  test("maps defaultJobLabels when provided in workflow settings", () => {
+    const workflowSettings = dataform.WorkflowSettings.create({
+      defaultJobLabels: { env: "prod", cost_center: "123" },
+    });
+
+    const projectConfig = workflowSettingsAsProjectConfig(workflowSettings);
+
+    expect(projectConfig.defaultJobLabels).to.deep.equal({ env: "prod", cost_center: "123" });
+  });
+
+  test("maps defaultLakehouseConfig to projectConfig.defaultLakehouseConfig", () => {
+    const workflowSettings = dataform.WorkflowSettings.create({
+      defaultLakehouseConfig: {
+        catalog: "my_catalog",
+        namespace: "my_namespace",
+      },
+    });
+
+    const projectConfig = workflowSettingsAsProjectConfig(workflowSettings);
+
+    expect(projectConfig.defaultLakehouseConfig).to.deep.equal({
+      catalog: "my_catalog",
+      namespace: "my_namespace",
+    });
+  });
 });

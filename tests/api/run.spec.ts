@@ -1,11 +1,14 @@
 import { config, expect } from "chai";
 import Long from "long";
-import { anyString, anything, instance, mock, verify, when } from "ts-mockito";
+import { anyString, anything, capture, instance, mock, verify, when } from "ts-mockito";
 
-import { Runner } from "df/cli/api";
+import { Runner, test as runTests } from "df/cli/api";
+import { checkJobLabelLimit, resolveJobLabels } from "df/cli/api/commands/run";
 import { IDbAdapter } from "df/cli/api/dbadapters";
 import { BigQueryDbAdapter } from "df/cli/api/dbadapters/bigquery";
+import { wrapWithCreateSchemaIfNotExists } from "df/cli/api/utils/query_transforms";
 import { sleep, sleepUntil } from "df/common/promises";
+import { deepClone } from "df/common/protos";
 import { dataform } from "df/protos/ts";
 import { suite, test } from "df/testing";
 
@@ -18,10 +21,10 @@ suite("@dataform/api/run", () => {
       defaultSchema: "foo",
       assertionSchema: "bar",
       defaultDatabase: "database",
-      defaultLocation: "US"
+      defaultLocation: "US",
     },
     runConfig: {
-      fullRefresh: true
+      fullRefresh: true,
     },
     warehouseState: {
       tables: [
@@ -29,53 +32,53 @@ suite("@dataform/api/run", () => {
           type: dataform.TableMetadata.Type.TABLE,
           target: {
             schema: "schema1",
-            name: "target1"
-          }
-        }
-      ]
+            name: "target1",
+          },
+        },
+      ],
     },
     actions: [
       {
         tasks: [
           {
             type: "executionTaskType",
-            statement: "SELECT foo FROM bar"
+            statement: "SELECT foo FROM bar",
           },
           {
             type: "executionTaskType",
-            statement: "SELECT 42"
-          }
+            statement: "SELECT 42",
+          },
         ],
         type: "table",
         target: {
           schema: "schema1",
-          name: "target1"
+          name: "target1",
         },
         tableType: "someTableType",
-        dependencyTargets: []
+        dependencyTargets: [],
       },
       {
         tasks: [
           {
             type: "executionTaskType2",
-            statement: "SELECT bar FROM baz"
-          }
+            statement: "SELECT bar FROM baz",
+          },
         ],
         type: "assertion",
         target: {
           database: "database2",
           schema: "schema2",
-          name: "target2"
+          name: "target2",
         },
         tableType: "someTableType",
         dependencyTargets: [
           {
             schema: "schema1",
-            name: "target1"
-          }
-        ]
-      }
-    ]
+            name: "target1",
+          },
+        ],
+      },
+    ],
   });
 
   const EXPECTED_RUN_RESULT = dataform.RunResult.create({
@@ -91,16 +94,16 @@ suite("@dataform/api/run", () => {
               bigquery: {
                 jobId: "abc",
                 totalBytesBilled: Long.fromNumber(0),
-                totalBytesProcessed: Long.fromNumber(0)
-              }
-            }
+                totalBytesProcessed: Long.fromNumber(0),
+              },
+            },
           },
           {
             status: dataform.TaskResult.ExecutionStatus.SUCCESSFUL,
-            metadata: {}
-          }
+            metadata: {},
+          },
         ],
-        status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL
+        status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL,
       },
       {
         target: RUN_TEST_GRAPH.actions![1].target,
@@ -108,37 +111,37 @@ suite("@dataform/api/run", () => {
           {
             status: dataform.TaskResult.ExecutionStatus.FAILED,
             metadata: {},
-            errorMessage: "bigquery error: bad statement"
-          }
+            errorMessage: "bigquery error: bad statement",
+          },
         ],
-        status: dataform.ActionResult.ExecutionStatus.FAILED
-      }
-    ]
+        status: dataform.ActionResult.ExecutionStatus.FAILED,
+      },
+    ],
   });
 
   test("execute", async () => {
     const mockedDbAdapter = mock(BigQueryDbAdapter);
-    when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+    when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
     when(
-      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
     ).thenResolve({
       rows: [],
       metadata: {
         bigquery: {
           jobId: "abc",
           totalBytesBilled: Long.fromNumber(0),
-          totalBytesProcessed: Long.fromNumber(0)
-        }
-      }
+          totalBytesProcessed: Long.fromNumber(0),
+        },
+      },
     });
     when(
-      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
     ).thenResolve({
       rows: [],
-      metadata: {}
+      metadata: {},
     });
     when(
-      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![1].tasks![0].statement!, anything())
+      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![1].tasks![0].statement!, anything()),
     ).thenReject(new Error("bad statement"));
 
     const mockDbAdapterInstance = instance(mockedDbAdapter);
@@ -146,10 +149,38 @@ suite("@dataform/api/run", () => {
     const runner = new Runner(mockDbAdapterInstance, RUN_TEST_GRAPH);
 
     expect(
-      dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON()
+      dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON(),
     ).to.deep.equal(EXPECTED_RUN_RESULT.toJSON());
-    verify(mockedDbAdapter.createSchema("database", "schema1")).once();
-    verify(mockedDbAdapter.createSchema("database2", "schema2")).once();
+  });
+
+  test("execute passes projectConfig.defaultLocation to BigQuery jobs, including the ones creating datasets", async () => {
+    const graph = dataform.ExecutionGraph.create({
+      projectConfig: {
+        warehouse: "bigquery",
+        defaultDatabase: "db",
+        defaultLocation: "europe-west1",
+      },
+      runConfig: {},
+      warehouseState: {},
+      actions: [
+        {
+          tasks: [{ type: "statement", statement: "SELECT 1" }],
+          type: "table",
+          target: { database: "db", schema: "s", name: "t" },
+          tableType: "table",
+          dependencyTargets: [],
+        },
+      ],
+    });
+    const mockedDbAdapter = mock(BigQueryDbAdapter);
+    when(mockedDbAdapter.schemas(anyString())).thenResolve([]);
+    when(mockedDbAdapter.execute(anyString(), anything())).thenResolve({ rows: [], metadata: {} });
+
+    await new Runner(instance(mockedDbAdapter), graph).execute().result();
+
+    const [statement, options] = capture(mockedDbAdapter.execute).last();
+    expect(statement).to.equal(wrapWithCreateSchemaIfNotExists("db", "s", "SELECT 1"));
+    expect(options.bigquery?.location).to.equal("europe-west1");
   });
 
   test("stop and then resume", async () => {
@@ -157,9 +188,9 @@ suite("@dataform/api/run", () => {
     let stopWasCalled = false;
 
     const mockedDbAdapter = mock(BigQueryDbAdapter);
-    when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+    when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
     when(
-      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
     ).thenCall(async () => {
       firstQueryInProgress = true;
       await sleepUntil(() => stopWasCalled);
@@ -169,19 +200,19 @@ suite("@dataform/api/run", () => {
           bigquery: {
             jobId: "abc",
             totalBytesBilled: Long.fromNumber(0),
-            totalBytesProcessed: Long.fromNumber(0)
-          }
-        }
+            totalBytesProcessed: Long.fromNumber(0),
+          },
+        },
       };
     });
     when(
-      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
     ).thenResolve({
       rows: [],
-      metadata: {}
+      metadata: {},
     });
     when(
-      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![1].tasks![0].statement!, anything())
+      mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![1].tasks![0].statement!, anything()),
     ).thenReject(new Error("bad statement"));
 
     const mockDbAdapterInstance = instance(mockedDbAdapter);
@@ -200,43 +231,41 @@ suite("@dataform/api/run", () => {
           {
             target: EXPECTED_RUN_RESULT.actions[0].target,
             status: dataform.ActionResult.ExecutionStatus.RUNNING,
-            tasks: [EXPECTED_RUN_RESULT.actions[0].tasks[0]]
-          }
-        ]
-      }).toJSON()
+            tasks: [EXPECTED_RUN_RESULT.actions[0].tasks[0]],
+          },
+        ],
+      }).toJSON(),
     );
 
     runner = Runner.resume(mockDbAdapterInstance, RUN_TEST_GRAPH, result);
 
     expect(
-      dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON()
+      dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON(),
     ).to.deep.equal(EXPECTED_RUN_RESULT.toJSON());
-    verify(mockedDbAdapter.createSchema("database", "schema1")).once();
-    verify(mockedDbAdapter.createSchema("database2", "schema2")).once();
   });
 
   suite("execute with retry", () => {
     test("should fail when execution fails too many times for the retry setting", async () => {
       const mockedDbAdapter = mock(BigQueryDbAdapter);
       const NEW_TEST_GRAPH = RUN_TEST_GRAPH;
-      when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
       when(
-        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
       ).thenResolve({
         rows: [],
         metadata: {
           bigquery: {
             jobId: "abc",
             totalBytesBilled: Long.fromNumber(0),
-            totalBytesProcessed: Long.fromNumber(0)
-          }
-        }
+            totalBytesProcessed: Long.fromNumber(0),
+          },
+        },
       });
       when(
-        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
       ).thenResolve({
         rows: [],
-        metadata: {}
+        metadata: {},
       });
       when(mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything()))
         .thenReject(new Error("bad statement"))
@@ -246,35 +275,35 @@ suite("@dataform/api/run", () => {
       const mockDbAdapterInstance = instance(mockedDbAdapter);
 
       const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH, {
-        bigquery: { actionRetryLimit: 1 }
+        bigquery: { actionRetryLimit: 1 },
       });
 
       expect(
-        dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON()
+        dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON(),
       ).to.deep.equal(EXPECTED_RUN_RESULT.toJSON());
     });
 
     test("should pass when execution fails initially, then passes with the number of allowed retries", async () => {
       const mockedDbAdapter = mock(BigQueryDbAdapter);
       const NEW_TEST_GRAPH = RUN_TEST_GRAPH;
-      when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
       when(
-        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
       ).thenResolve({
         rows: [],
         metadata: {
           bigquery: {
             jobId: "abc",
             totalBytesBilled: Long.fromNumber(0),
-            totalBytesProcessed: Long.fromNumber(0)
-          }
-        }
+            totalBytesProcessed: Long.fromNumber(0),
+          },
+        },
       });
       when(
-        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
       ).thenResolve({
         rows: [],
-        metadata: {}
+        metadata: {},
       });
       when(mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything()))
         .thenReject(new Error("bad statement"))
@@ -284,11 +313,11 @@ suite("@dataform/api/run", () => {
       const mockDbAdapterInstance = instance(mockedDbAdapter);
 
       const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH, {
-        bigquery: { actionRetryLimit: 2 }
+        bigquery: { actionRetryLimit: 2 },
       });
 
       expect(
-        dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON()
+        dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON(),
       ).to.deep.equal(
         dataform.RunResult.create({
           status: dataform.RunResult.ExecutionStatus.SUCCESSFUL,
@@ -299,13 +328,13 @@ suite("@dataform/api/run", () => {
               tasks: [
                 {
                   status: dataform.TaskResult.ExecutionStatus.SUCCESSFUL,
-                  metadata: {}
-                }
+                  metadata: {},
+                },
               ],
-              status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL
-            }
-          ]
-        }).toJSON()
+              status: dataform.ActionResult.ExecutionStatus.SUCCESSFUL,
+            },
+          ],
+        }).toJSON(),
       );
     });
 
@@ -314,30 +343,30 @@ suite("@dataform/api/run", () => {
       const NEW_TEST_GRAPH_WITH_OPERATION = RUN_TEST_GRAPH;
       NEW_TEST_GRAPH_WITH_OPERATION.actions[1].tasks[0].type = "operation";
 
-      when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
       when(
-        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
       ).thenResolve({
         rows: [],
         metadata: {
           bigquery: {
             jobId: "abc",
             totalBytesBilled: Long.fromNumber(0),
-            totalBytesProcessed: Long.fromNumber(0)
-          }
-        }
+            totalBytesProcessed: Long.fromNumber(0),
+          },
+        },
       });
       when(
-        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
       ).thenResolve({
         rows: [],
-        metadata: {}
+        metadata: {},
       });
       when(
         mockedDbAdapter.execute(
           NEW_TEST_GRAPH_WITH_OPERATION.actions![1].tasks![0].statement!,
-          anything()
-        )
+          anything(),
+        ),
       )
         .thenReject(new Error("bad statement"))
         .thenReject(new Error("bad statement"))
@@ -346,11 +375,11 @@ suite("@dataform/api/run", () => {
       const mockDbAdapterInstance = instance(mockedDbAdapter);
 
       const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH_WITH_OPERATION, {
-        bigquery: { actionRetryLimit: 3 }
+        bigquery: { actionRetryLimit: 3 },
       });
 
       expect(
-        dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON()
+        dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON(),
       ).to.deep.equal(EXPECTED_RUN_RESULT.toJSON());
     });
   });
@@ -361,28 +390,28 @@ suite("@dataform/api/run", () => {
         warehouse: "bigquery",
         defaultSchema: "foo",
         assertionSchema: "bar",
-        defaultLocation: "US"
+        defaultLocation: "US",
       },
       warehouseState: {
-        tables: []
+        tables: [],
       },
       actions: [
         {
           tasks: [
             {
               type: "statement",
-              statement: "some statement"
-            }
+              statement: "some statement",
+            },
           ],
           type: "table",
           target: {
             schema: "schema1",
-            name: "target1"
+            name: "target1",
           },
           tableType: "table",
-          dependencyTargets: []
-        }
-      ]
+          dependencyTargets: [],
+        },
+      ],
     });
 
     let wasCancelled = false;
@@ -394,9 +423,8 @@ suite("@dataform/api/run", () => {
             reject(new Error("Run cancelled"));
           });
         }),
-      schemas: _ => Promise.resolve([]),
-      createSchema: (_, __) => Promise.resolve(),
-      table: _ => undefined
+      schemas: (_) => Promise.resolve([]),
+      table: (_) => undefined,
     } as IDbAdapter;
 
     const runner = new Runner(mockDbAdapter, CANCEL_TEST_GRAPH);
@@ -419,9 +447,9 @@ suite("@dataform/api/run", () => {
 
       const mockedDbAdapter = mock(BigQueryDbAdapter);
       const NEW_TEST_GRAPH = RUN_TEST_GRAPH;
-      when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
       when(
-        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
       ).thenCall((statement: string, options: any) => {
         executionOptions.push(options);
         return Promise.resolve({
@@ -430,19 +458,19 @@ suite("@dataform/api/run", () => {
             bigquery: {
               jobId: "abc",
               totalBytesBilled: Long.fromNumber(0),
-              totalBytesProcessed: Long.fromNumber(0)
-            }
-          }
+              totalBytesProcessed: Long.fromNumber(0),
+            },
+          },
         });
       });
       when(
-        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
       ).thenCall((statement: string, options: any) => {
         executionOptions.push(options);
         return Promise.resolve({ rows: [], metadata: {} });
       });
       when(
-        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything()),
       ).thenCall((statement: string, options: any) => {
         executionOptions.push(options);
         return Promise.resolve({ rows: [], metadata: {} });
@@ -452,7 +480,7 @@ suite("@dataform/api/run", () => {
 
       const labels = { env: "testing", team: "dataform" };
       const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH, {
-        bigquery: { labels }
+        bigquery: { labels },
       });
 
       const result = await runner.execute().result();
@@ -463,14 +491,14 @@ suite("@dataform/api/run", () => {
 
       // Verify that at least some calls included labels in the options
       const callsWithLabels = executionOptions.filter(
-        opts =>
+        (opts) =>
           opts?.bigquery?.labels &&
           opts.bigquery.labels.env === "testing" &&
-          opts.bigquery.labels.team === "dataform"
+          opts.bigquery.labels.team === "dataform",
       );
       expect(callsWithLabels.length).to.equal(
         3,
-        "Expected 3 execute calls to include the labels in options"
+        "Expected 3 execute calls to include the labels in options",
       );
     });
 
@@ -478,15 +506,15 @@ suite("@dataform/api/run", () => {
       const executionOptions: Array<{ bigquery?: any }> = [];
 
       const mockedDbAdapter = mock(BigQueryDbAdapter);
-      const NEW_TEST_GRAPH = RUN_TEST_GRAPH;
+      const NEW_TEST_GRAPH = deepClone(dataform.ExecutionGraph, RUN_TEST_GRAPH);
       // Set action-level labels on the first action
       NEW_TEST_GRAPH.actions![0].actionDescriptor = {
-        bigqueryLabels: { action_level: "specific_value" }
+        bigqueryLabels: { action_level: "specific_value" },
       };
 
-      when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
       when(
-        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
       ).thenCall((statement: string, options: any) => {
         executionOptions.push(options);
         return Promise.resolve({
@@ -495,19 +523,19 @@ suite("@dataform/api/run", () => {
             bigquery: {
               jobId: "abc",
               totalBytesBilled: Long.fromNumber(0),
-              totalBytesProcessed: Long.fromNumber(0)
-            }
-          }
+              totalBytesProcessed: Long.fromNumber(0),
+            },
+          },
         });
       });
       when(
-        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything())
+        mockedDbAdapter.execute(RUN_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
       ).thenCall((statement: string, options: any) => {
         executionOptions.push(options);
         return Promise.resolve({ rows: [], metadata: {} });
       });
       when(
-        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything())
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything()),
       ).thenCall((statement: string, options: any) => {
         executionOptions.push(options);
         return Promise.resolve({ rows: [], metadata: {} });
@@ -517,7 +545,7 @@ suite("@dataform/api/run", () => {
 
       const globalLabels = { env: "testing", team: "dataform" };
       const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH, {
-        bigquery: { labels: globalLabels }
+        bigquery: { labels: globalLabels },
       });
 
       const result = await runner.execute().result();
@@ -533,16 +561,16 @@ suite("@dataform/api/run", () => {
         // Should have global labels
         expect(opts.bigquery.labels.env).to.equal(
           "testing",
-          `Call ${index} should have global label 'env'`
+          `Call ${index} should have global label 'env'`,
         );
         expect(opts.bigquery.labels.team).to.equal(
           "dataform",
-          `Call ${index} should have global label 'team'`
+          `Call ${index} should have global label 'team'`,
         );
         // Should have action-level label
         expect(opts.bigquery.labels.action_level).to.equal(
           "specific_value",
-          `Call ${index} should have action-level label 'action_level'`
+          `Call ${index} should have action-level label 'action_level'`,
         );
       });
 
@@ -554,6 +582,294 @@ suite("@dataform/api/run", () => {
       // This action doesn't have action-level labels
       expect(assertionCall.bigquery.labels.action_level).to.equal(undefined);
     });
+
+    test("should pass actionDescriptor.jobLabels to executeTask", async () => {
+      const executionOptions: Array<{ bigquery?: any }> = [];
+
+      const mockedDbAdapter = mock(BigQueryDbAdapter);
+      const NEW_TEST_GRAPH = deepClone(dataform.ExecutionGraph, RUN_TEST_GRAPH);
+      NEW_TEST_GRAPH.actions![0].actionDescriptor = {
+        jobLabels: { env: "prod", cost_center: "analytics" },
+      };
+
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
+      when(
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
+      ).thenCall((statement: string, options: any) => {
+        executionOptions.push(options);
+        return Promise.resolve({
+          rows: [],
+          metadata: {
+            bigquery: {
+              jobId: "abc",
+              totalBytesBilled: Long.fromNumber(0),
+              totalBytesProcessed: Long.fromNumber(0),
+            },
+          },
+        });
+      });
+      when(
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
+      ).thenCall((statement: string, options: any) => {
+        executionOptions.push(options);
+        return Promise.resolve({ rows: [], metadata: {} });
+      });
+      when(
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything()),
+      ).thenCall((statement: string, options: any) => {
+        executionOptions.push(options);
+        return Promise.resolve({ rows: [], metadata: {} });
+      });
+
+      const mockDbAdapterInstance = instance(mockedDbAdapter);
+
+      const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH, {
+        bigquery: { labels: { env: "dev", team: "dataform" } },
+      });
+
+      const result = await runner.execute().result();
+      expect(result.status).to.equal(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+      expect(executionOptions.length).to.equal(3);
+
+      const firstActionCalls = executionOptions.slice(0, 2);
+      firstActionCalls.forEach((opts) => {
+        expect(opts?.bigquery?.labels).to.deep.equal({
+          env: "dev",
+          team: "dataform",
+          cost_center: "analytics",
+        });
+      });
+
+      const assertionCall = executionOptions[2];
+      expect(assertionCall?.bigquery?.labels).to.deep.equal({
+        env: "dev",
+        team: "dataform",
+      });
+    });
+
+    test("should pass testCase.actionDescriptor.jobLabels to unit test jobs", async () => {
+      const executionOptions: Array<{ bigquery?: any }> = [];
+      const mockedDbAdapter = mock(BigQueryDbAdapter);
+      when(mockedDbAdapter.execute(anyString(), anything())).thenCall(
+        (_statement: string, options: any) => {
+          executionOptions.push(options);
+          return Promise.resolve({
+            rows: [{ col1: 1 }],
+            metadata: {},
+          });
+        },
+      );
+
+      const mockDbAdapterInstance = instance(mockedDbAdapter);
+      const results = await runTests(mockDbAdapterInstance, [
+        {
+          name: "labeled_test",
+          testQuery: "SELECT 1 AS col1",
+          expectedOutputQuery: "SELECT 1 AS col1",
+          actionDescriptor: {
+            jobLabels: {
+              env: "prod",
+              team: "analytics",
+            },
+          },
+        },
+      ]);
+
+      expect(results).to.deep.equal([
+        {
+          name: "labeled_test",
+          successful: true,
+        },
+      ]);
+      expect(executionOptions.length).to.equal(2);
+      executionOptions.forEach((opts) => {
+        expect(opts?.bigquery?.labels).to.deep.equal({
+          env: "prod",
+          team: "analytics",
+        });
+      });
+    });
+
+    test("uses actionDescriptor.jobLabels instead of bigqueryLabels for jobs while executionOptions.bigquery.labels takes highest precedence", async () => {
+      const executionOptions: Array<{ bigquery?: any }> = [];
+      const setMetadataActionDescriptors: dataform.IActionDescriptor[] = [];
+
+      const mockedDbAdapter = mock(BigQueryDbAdapter);
+      const NEW_TEST_GRAPH = deepClone(dataform.ExecutionGraph, RUN_TEST_GRAPH);
+      NEW_TEST_GRAPH.actions![0].actionDescriptor = {
+        bigqueryLabels: {
+          shared_key: "from_bigquery_labels",
+          table_only: "table_val",
+        },
+        jobLabels: {
+          shared_key: "from_job_labels",
+          job_only: "job_val",
+          cli_override_key: "from_job_labels",
+        },
+      };
+
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
+      when(
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![0].statement!, anything()),
+      ).thenCall((_statement: string, options: any) => {
+        executionOptions.push(options);
+        return Promise.resolve({
+          rows: [],
+          metadata: {
+            bigquery: {
+              jobId: "abc",
+              totalBytesBilled: Long.fromNumber(0),
+              totalBytesProcessed: Long.fromNumber(0),
+            },
+          },
+        });
+      });
+      when(
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![0].tasks![1].statement!, anything()),
+      ).thenCall((_statement: string, options: any) => {
+        executionOptions.push(options);
+        return Promise.resolve({ rows: [], metadata: {} });
+      });
+      when(
+        mockedDbAdapter.execute(NEW_TEST_GRAPH.actions![1].tasks![0].statement!, anything()),
+      ).thenCall((_statement: string, options: any) => {
+        executionOptions.push(options);
+        return Promise.resolve({ rows: [], metadata: {} });
+      });
+      when(mockedDbAdapter.setMetadata(anything())).thenCall(
+        (action: dataform.IExecutionAction) => {
+          setMetadataActionDescriptors.push(action.actionDescriptor!);
+          return Promise.resolve();
+        },
+      );
+
+      const mockDbAdapterInstance = instance(mockedDbAdapter);
+      const runner = new Runner(mockDbAdapterInstance, NEW_TEST_GRAPH, {
+        bigquery: {
+          labels: {
+            cli_override_key: "from_execution_options",
+            global_only: "global_val",
+          },
+        },
+      });
+
+      const result = await runner.execute().result();
+      expect(result.status).to.equal(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+
+      const firstActionCalls = executionOptions.slice(0, 2);
+      firstActionCalls.forEach((opts) => {
+        expect(opts?.bigquery?.labels).to.deep.equal({
+          shared_key: "from_job_labels",
+          job_only: "job_val",
+          cli_override_key: "from_execution_options",
+          global_only: "global_val",
+        });
+      });
+      expect(setMetadataActionDescriptors.length).to.equal(1);
+      expect(setMetadataActionDescriptors[0].bigqueryLabels).to.deep.equal({
+        shared_key: "from_bigquery_labels",
+        table_only: "table_val",
+      });
+    });
+
+    test("doesn't set table metadata when the actionDescriptor only has jobLabels", async () => {
+      const mockedDbAdapter = mock(BigQueryDbAdapter);
+      const NEW_TEST_GRAPH = deepClone(dataform.ExecutionGraph, RUN_TEST_GRAPH);
+      // As in a decoded graph, create() sets the unset columns and bigqueryLabels to [] and {}.
+      NEW_TEST_GRAPH.actions![0].actionDescriptor = dataform.ActionDescriptor.create({
+        jobLabels: { env: "prod" },
+      });
+      when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
+      when(mockedDbAdapter.execute(anything(), anything())).thenResolve({ rows: [], metadata: {} });
+
+      const runner = new Runner(instance(mockedDbAdapter), NEW_TEST_GRAPH);
+      const result = await runner.execute().result();
+
+      expect(result.status).to.equal(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+      verify(mockedDbAdapter.setMetadata(anything())).never();
+    });
+
+    test("resolveJobLabels falls back to bigqueryLabels when jobLabels is empty, and execution labels override them", () => {
+      // Like in a decoded compiled graph, ActionDescriptor.create() sets the unset jobLabels map to {}.
+      const actionDescriptor = dataform.ActionDescriptor.create({
+        bigqueryLabels: { env: "from_table", table_only: "table_val" },
+      });
+      expect(actionDescriptor.jobLabels).to.deep.equal({});
+
+      expect(resolveJobLabels(actionDescriptor)).to.deep.equal({
+        env: "from_table",
+        table_only: "table_val",
+      });
+      expect(resolveJobLabels(actionDescriptor, { env: "from_cli" })).to.deep.equal({
+        env: "from_cli",
+        table_only: "table_val",
+      });
+    });
+
+    test("checkJobLabelLimit reports actions and unit tests whose jobs would get more than 64 labels", () => {
+      const labels = (prefix: string, count: number) => {
+        const result: { [key: string]: string } = {};
+        for (let i = 0; i < count; i++) {
+          result[`${prefix}_${i}`] = "v";
+        }
+        return result;
+      };
+      const action: dataform.IExecutionAction = {
+        target: { database: "p", schema: "s", name: "t" },
+        tasks: [{ type: "statement", statement: "SELECT 1" }],
+        actionDescriptor: { jobLabels: labels("job", 32) },
+      };
+      const unitTest: dataform.ITest = {
+        name: "my_test",
+        actionDescriptor: { jobLabels: labels("job", 32) },
+      };
+
+      expect(checkJobLabelLimit([action], [unitTest], labels("cli", 32))).to.equal(undefined);
+      expect(checkJobLabelLimit([action], [], labels("cli", 33))).to.equal(
+        'Action "p.s.t" would run BigQuery jobs with 65 labels, but BigQuery allows at most 64.',
+      );
+      expect(checkJobLabelLimit([], [unitTest], labels("cli", 33))).to.equal(
+        'Unit test "my_test" would run BigQuery jobs with 65 labels, but BigQuery allows at most 64.',
+      );
+      // Disabled actions run no jobs, so they aren't checked.
+      expect(checkJobLabelLimit([{ ...action, tasks: [] }], [], labels("cli", 33))).to.equal(
+        undefined,
+      );
+    });
+
+    test("should let execution labels override testCase.actionDescriptor.jobLabels for unit test jobs", async () => {
+      const executionOptions: Array<{ bigquery?: any }> = [];
+      const mockedDbAdapter = mock(BigQueryDbAdapter);
+      when(mockedDbAdapter.execute(anyString(), anything())).thenCall(
+        (_statement: string, options: any) => {
+          executionOptions.push(options);
+          return Promise.resolve({ rows: [{ col1: 1 }], metadata: {} });
+        },
+      );
+
+      const results = await runTests(
+        instance(mockedDbAdapter),
+        [
+          {
+            name: "labeled_test",
+            testQuery: "SELECT 1 AS col1",
+            expectedOutputQuery: "SELECT 1 AS col1",
+            actionDescriptor: { jobLabels: { env: "prod", team: "analytics" } },
+          },
+        ],
+        { env: "from_cli", run_id: "123" },
+      );
+
+      expect(results).to.deep.equal([{ name: "labeled_test", successful: true }]);
+      expect(executionOptions.length).to.equal(2);
+      executionOptions.forEach((opts) => {
+        expect(opts?.bigquery?.labels).to.deep.equal({
+          env: "from_cli",
+          team: "analytics",
+          run_id: "123",
+        });
+      });
+    });
   });
 
   test("continues after setMetadata fails", async () => {
@@ -562,37 +878,37 @@ suite("@dataform/api/run", () => {
         warehouse: "bigquery",
         defaultSchema: "foo",
         assertionSchema: "bar",
-        defaultLocation: "US"
+        defaultLocation: "US",
       },
       warehouseState: {
-        tables: []
+        tables: [],
       },
       actions: [
         {
           tasks: [
             {
               type: "statement",
-              statement: "some statement"
-            }
+              statement: "some statement",
+            },
           ],
           type: "table",
           target: {
             schema: "schema1",
-            name: "target1"
+            name: "target1",
           },
           actionDescriptor: {
-            description: "desc"
+            description: "desc",
           },
           tableType: "table",
-          dependencyTargets: []
-        }
-      ]
+          dependencyTargets: [],
+        },
+      ],
     });
     const mockedDbAdapter = mock(BigQueryDbAdapter);
-    when(mockedDbAdapter.createSchema(anyString(), anyString())).thenResolve(null);
+    when(mockedDbAdapter.schemas(anything())).thenResolve(["schema1", "schema2"]);
     when(mockedDbAdapter.execute(anything(), anything())).thenResolve({
       rows: [],
-      metadata: {}
+      metadata: {},
     });
     when(mockedDbAdapter.setMetadata(anything())).thenReject(new Error("Error during setMetadata"));
 
@@ -601,25 +917,25 @@ suite("@dataform/api/run", () => {
     const runner = new Runner(mockDbAdapterInstance, METADATA_TEST_GRAPH);
 
     expect(
-      dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON()
+      dataform.RunResult.create(cleanTiming(await runner.execute().result())).toJSON(),
     ).to.deep.equal({
       actions: [
         {
           status: "FAILED",
           target: {
             name: "target1",
-            schema: "schema1"
+            schema: "schema1",
           },
           tasks: [
             {
               errorMessage: "Error setting metadata: Error during setMetadata",
               metadata: {},
-              status: "FAILED"
-            }
-          ]
-        }
+              status: "FAILED",
+            },
+          ],
+        },
       ],
-      status: "FAILED"
+      status: "FAILED",
     });
   });
 });
@@ -627,9 +943,9 @@ suite("@dataform/api/run", () => {
 function cleanTiming(runResult: dataform.IRunResult) {
   const newRunResult = dataform.RunResult.create(runResult);
   delete newRunResult.timing;
-  newRunResult.actions.forEach(actionResult => {
+  newRunResult.actions.forEach((actionResult) => {
     delete actionResult.timing;
-    actionResult.tasks.forEach(taskResult => {
+    actionResult.tasks.forEach((taskResult) => {
       delete taskResult.timing;
     });
   });

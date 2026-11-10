@@ -2,6 +2,7 @@ import { Action, ActionProto } from "df/core/actions";
 import { Assertion } from "df/core/actions/assertion";
 import { DataPreparation } from "df/core/actions/data_preparation";
 import { IncrementalTable } from "df/core/actions/incremental_table";
+import { resolveLakehouseSchema } from "df/core/actions/lakehouse";
 import { Notebook } from "df/core/actions/notebook";
 import { Operation } from "df/core/actions/operation";
 import { PropertyGraph } from "df/core/actions/property_graph";
@@ -16,13 +17,7 @@ declare var __webpack_require__: any;
 declare var __non_webpack_require__: any;
 
 type actionsWithDependencies =
-  | Table
-  | View
-  | IncrementalTable
-  | Operation
-  | Notebook
-  | DataPreparation
-  | PropertyGraph;
+  Table | View | IncrementalTable | Operation | Notebook | DataPreparation | PropertyGraph;
 
 // This side-steps webpack's require in favour of the real require.
 export const nativeRequire =
@@ -30,13 +25,13 @@ export const nativeRequire =
 
 export function matchPatterns(patterns: string[], values: string[]) {
   const fullyQualifiedActions: string[] = [];
-  patterns.forEach(pattern => {
+  patterns.forEach((pattern) => {
     if (pattern.includes(".")) {
       if (values.includes(pattern)) {
         fullyQualifiedActions.push(pattern);
       }
     } else {
-      const matchingActions = values.filter(value => pattern === value.split(".").slice(-1)[0]);
+      const matchingActions = values.filter((value) => pattern === value.split(".").slice(-1)[0]);
       if (matchingActions.length === 0) {
         return;
       }
@@ -53,11 +48,13 @@ export function getCallerFile(rootDir: string) {
   let lastfile: string;
   const stack = getCurrentStack();
   while (stack.length) {
-    const nextLastfile = stack.shift().getFileName();
-    if (!nextLastfile) {
+    const rawNextLastfile = stack.shift().getFileName();
+    if (!rawNextLastfile) {
       continue;
     }
-    if (!nextLastfile.includes(rootDir)) {
+    const nextLastfile = Path.toPosixPath(rawNextLastfile);
+    // An empty rootDir (a host that doesn't set projectDir) matches every file, as before.
+    if (rootDir && !Path.startsWithPath(nextLastfile, rootDir)) {
       continue;
     }
     if (nextLastfile.includes("node_modules")) {
@@ -66,12 +63,7 @@ export function getCallerFile(rootDir: string) {
     // If it's in the root directory we'll take it, but keep searching
     // for a better match.
     lastfile = nextLastfile;
-    if (
-      !(
-        nextLastfile.includes(`definitions${Path.separator}`) ||
-        nextLastfile.includes(`models${Path.separator}`)
-      )
-    ) {
+    if (!(nextLastfile.includes("definitions/") || nextLastfile.includes("models/"))) {
       continue;
     }
     break;
@@ -96,7 +88,7 @@ function getCurrentStack(): NodeJS.CallSite[] {
     Error.prepareStackTrace = (err, stack) => {
       return stack;
     };
-    return (new Error().stack as unknown) as NodeJS.CallSite[];
+    return new Error().stack as unknown as NodeJS.CallSite[];
   } finally {
     Error.stackTraceLimit = originalStackTraceLimit;
     Error.prepareStackTrace = originalPrepareStackTrace;
@@ -109,8 +101,8 @@ export function graphHasErrors(graph: dataform.ICompiledGraph) {
 
 const invalidRefInputMessage =
   "Invalid input. Accepted inputs include: a single object containing " +
-  "an (optional) 'database', (optional) 'schema', and 'name', " +
-  "or 1-3 inputs consisting of an (optional) database, (optional) schema, and 'name'.";
+  "an (optional) 'database', (optional) 'schema' (or 'catalog' and 'namespace'), and 'name', " +
+  "or 1-4 inputs consisting of an (optional) database, (optional) catalog and namespace (or schema), and 'name'.";
 
 export function toResolvable(ref: Resolvable | string[], rest: string[] = []): Resolvable {
   if (Array.isArray(ref) && rest.length > 0) {
@@ -119,31 +111,51 @@ export function toResolvable(ref: Resolvable | string[], rest: string[] = []): R
   if (rest.length === 0 && !Array.isArray(ref)) {
     return ref;
   }
-  const resolvableArray = Array.isArray(ref) ? ref.reverse() : [ref, ...rest].reverse();
+  const resolvableArray = Array.isArray(ref) ? [...ref].reverse() : [ref, ...rest].reverse();
   if (!isResolvableArray(resolvableArray)) {
     throw new Error(invalidRefInputMessage);
+  }
+  if (resolvableArray.length === 4) {
+    const [name, namespace, catalog, database] = resolvableArray;
+    return { database, schema: `${catalog}.${namespace}`, name };
   }
   const [name, schema, database] = resolvableArray;
   return { database, schema, name };
 }
 
-function isResolvableArray(parts: any[]): parts is [string, string?, string?] {
-  if (parts.some(part => typeof part !== "string")) {
+function isResolvableArray(parts: any[]): parts is [string, string?, string?, string?] {
+  if (parts.some((part) => typeof part !== "string")) {
     return false;
   }
-  return parts.length > 0 && parts.length <= 3;
+  return parts.length > 0 && parts.length <= 4;
 }
 
 export function resolvableAsTarget(
-  resolvable: Resolvable | dataform.ActionConfig.Target
+  resolvable: Resolvable | dataform.ActionConfig.Target,
+  defaultLakehouseConfig?: dataform.IDefaultLakehouseConfig | null,
 ): dataform.Target {
   if (typeof resolvable === "string") {
     return dataform.Target.create({
-      name: resolvable
+      name: resolvable,
     });
   }
-  const actionConfigTarget = (resolvable as dataform.ActionConfig.ITarget);
-  if (actionConfigTarget instanceof dataform.ActionConfig.Target || actionConfigTarget.dataset !== undefined || actionConfigTarget.project !== undefined) {
+  const obj = resolvable as any;
+  const catalog = obj.catalog ?? obj.lakehouse?.catalog;
+  const namespace = obj.namespace ?? obj.lakehouse?.namespace;
+  if (catalog != null || namespace != null || obj.lakehouse != null) {
+    return dataform.Target.create({
+      name: obj.name,
+      schema: resolveLakehouseSchema({ catalog, namespace }, defaultLakehouseConfig, true),
+      database: obj.database ?? obj.project,
+      includeDependentAssertions: obj.includeDependentAssertions,
+    });
+  }
+  const actionConfigTarget = resolvable as dataform.ActionConfig.ITarget;
+  if (
+    actionConfigTarget instanceof dataform.ActionConfig.Target ||
+    actionConfigTarget.dataset !== undefined ||
+    actionConfigTarget.project !== undefined
+  ) {
     return dataform.Target.create({
       name: actionConfigTarget.name,
       schema: actionConfigTarget.dataset,
@@ -155,11 +167,11 @@ export function resolvableAsTarget(
 }
 
 export function resolvableAsActionConfigTarget(
-  resolvable: string | object
+  resolvable: string | object,
 ): dataform.ActionConfig.ITarget {
   if (typeof resolvable === "string") {
     const parts = resolvable.split(".").reverse();
-    if (!isResolvableArray(parts)) {
+    if (!isResolvableArray(parts) || parts.length > 3) {
       throw new Error(invalidRefInputMessage);
     }
 
@@ -169,6 +181,23 @@ export function resolvableAsActionConfigTarget(
       dataset: schema,
       project: database,
     };
+  }
+
+  const obj = resolvable as any;
+  if (obj && typeof obj === "object") {
+    const catalog = obj.catalog ?? obj.lakehouse?.catalog;
+    const namespace = obj.namespace ?? obj.lakehouse?.namespace;
+    if (catalog != null || namespace != null || obj.lakehouse != null) {
+      return {
+        name: obj.name,
+        project: obj.project ?? obj.database,
+        lakehouse: {
+          catalog,
+          namespace,
+        },
+        includeDependentAssertions: obj.includeDependentAssertions,
+      };
+    }
   }
 
   return resolvable as dataform.ActionConfig.ITarget;
@@ -183,10 +212,10 @@ export function ambiguousActionNameMsg(act: Resolvable, allActs: Action[] | stri
     typeof allActs[0] === "string"
       ? allActs
       : (allActs as Array<Table | Operation | Assertion>).map(
-        r => `${r.getTarget().schema}.${r.getTarget().name}`
-      );
+          (r) => `${r.getTarget().schema}.${r.getTarget().name}`,
+        );
   return `Ambiguous Action name: ${stringifyResolvable(
-    act
+    act,
   )}. Did you mean one of: ${allActNames.join(", ")}.`;
 }
 
@@ -197,12 +226,12 @@ export function target(
   config: dataform.IProjectConfig,
   name: string,
   schema?: string,
-  database?: string
+  database?: string,
 ): dataform.ITarget {
   return dataform.Target.create({
     name,
     schema: schema || config.defaultSchema || undefined,
-    database: database || config.defaultDatabase || undefined
+    database: database || config.defaultDatabase || undefined,
   });
 }
 
@@ -211,7 +240,7 @@ export function target(
  */
 export function strictKeysOf<T>() {
   return <U extends Array<keyof T>>(
-    array: U & ([keyof T] extends [U[number]] ? unknown : Array<["Needs to be all of", T]>)
+    array: U & ([keyof T] extends [U[number]] ? unknown : Array<["Needs to be all of", T]>),
   ) => array;
 }
 
@@ -223,17 +252,18 @@ export function checkExcessProperties<T>(
   reportError: (e: Error) => void,
   object: T,
   supportedProperties: string[],
-  name?: string
+  name?: string,
 ) {
   const extraProperties = Object.keys(object).filter(
-    key => !(supportedProperties as string[]).includes(key)
+    (key) => !(supportedProperties as string[]).includes(key),
   );
   if (extraProperties.length > 0) {
     reportError(
       new Error(
-        `Unexpected property "${extraProperties[0]}"${!!name ? ` in ${name}` : ""
-        }. Supported properties are: ${JSON.stringify(supportedProperties)}`
-      )
+        `Unexpected property "${extraProperties[0]}"${
+          !!name ? ` in ${name}` : ""
+        }. Supported properties are: ${JSON.stringify(supportedProperties)}`,
+      ),
     );
   }
 }
@@ -242,10 +272,10 @@ export function validateQueryString(session: Session, query: string, filename: s
   if (query?.trim().slice(-1) === ";") {
     session.compileError(
       new Error(
-        "Semi-colons are not allowed at the end of SQL statements."
+        "Semi-colons are not allowed at the end of SQL statements.",
         // This can break the statement because of appended adapter specific SQL.
       ),
-      filename
+      filename,
     );
   }
 }
@@ -256,25 +286,34 @@ export function validateNoMixedCompilationMode(
   contextableQuery: Contextable<any, any>,
   contextableWhere: Contextable<any, any>,
   contextablePostOps: Array<Contextable<any, any>>,
-  contextablePreOps: Array<Contextable<any, any>>
+  contextablePreOps: Array<Contextable<any, any>>,
 ) {
   let flattenPostOps: unknown[] = [];
-  contextablePostOps.forEach(op => {
+  contextablePostOps.forEach((op) => {
     flattenPostOps = flattenPostOps.concat(typeof op === "object" ? op : [op]);
   });
   let flattenPreOps: unknown[] = [];
-  contextablePreOps.forEach(op => {
+  contextablePreOps.forEach((op) => {
     flattenPreOps = flattenPreOps.concat(typeof op === "object" ? op : [op]);
   });
   const conflictingProperties: string[] = [];
-  if (!!contextableQuery) { conflictingProperties.push("query"); }
-  if (!!contextableWhere) { conflictingProperties.push("where"); }
-  if (!!flattenPostOps.length) { conflictingProperties.push("postOps"); }
-  if (!!flattenPreOps.length) { conflictingProperties.push("preOps"); }
+  if (!!contextableQuery) {
+    conflictingProperties.push("query");
+  }
+  if (!!contextableWhere) {
+    conflictingProperties.push("where");
+  }
+  if (!!flattenPostOps.length) {
+    conflictingProperties.push("postOps");
+  }
+  if (!!flattenPreOps.length) {
+    conflictingProperties.push("preOps");
+  }
   if (conflictingProperties.length) {
     const err = new Error(
-      `Cannot mix AoT and JiT compilation in action. The following AoT properties were found: ${conflictingProperties.join(", ")
-      }`
+      `Cannot mix AoT and JiT compilation in action. The following AoT properties were found: ${conflictingProperties.join(
+        ", ",
+      )}`,
     );
     session.compileError(err, filename);
     throw err;
@@ -285,9 +324,7 @@ export function validateNoMixedCompilationMode(
  * Checks if the Cloud Resource connection has a valid format.
  * @param connection String to be validated.
  */
-export function validateConnectionFormat(
-  connection: string,
-) {
+export function validateConnectionFormat(connection: string) {
   // Connection pattern of the form project.location.connection_id. Example:
   // my-project.us-central1.my-connection
   const dotPattern = /^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/;
@@ -295,34 +332,27 @@ export function validateConnectionFormat(
   // Connection pattern of the form projects/<substring>/locations/<substring>/connections/<substring>
   // Example: projects/my-project/locations/us-central1/connections/my-connection
   // Substrings cannot contain '/'.
-  const resourcePattern =
-    /^projects\/[^/]+\/locations\/[^/]+\/connections\/[^/]+$/;
+  const resourcePattern = /^projects\/[^/]+\/locations\/[^/]+\/connections\/[^/]+$/;
 
-  const isValidFormat =
-    dotPattern.test(connection) || resourcePattern.test(connection);
+  const isValidFormat = dotPattern.test(connection) || resourcePattern.test(connection);
 
-  if (connection !== 'DEFAULT' && !isValidFormat) {
+  if (connection !== "DEFAULT" && !isValidFormat) {
     throw new Error(
-      'The connection must be in the format `{project}.{location}.{connection_id}` or `projects/{project}/locations/{location}/connections/{connection_id}`, or be set to `DEFAULT`.',
+      "The connection must be in the format `{project}.{location}.{connection_id}` or `projects/{project}/locations/{location}/connections/{connection_id}`, or be set to `DEFAULT`.",
     );
   }
-
 }
 
 /**
  * Checks if the storageUri is a valid GCS path.
  * @param storageUri String to be validated.
  */
-export function validateStorageUriFormat(
-  storageUri: string,
-) {
+export function validateStorageUriFormat(storageUri: string) {
   // storageUri must have format gs://<bucket_name>/<path_to_data>
   const gcsPathPattern = /^gs:\/\/([^/]+)\/(.+)$/;
 
   if (!gcsPathPattern.test(storageUri)) {
-    throw new Error(
-      'The storage URI must be in the format `gs://{bucket_name}/{path_to_data}`.',
-    );
+    throw new Error("The storage URI must be in the format `gs://{bucket_name}/{path_to_data}`.");
   }
 }
 
@@ -331,9 +361,7 @@ export function validateStorageUriFormat(
  * @param configFileFormat User-provided file format, if it exists.
  * @return File format used when creating an Iceberg table.
  */
-export function getFileFormatValueForIcebergTable(
-  configFileFormat?: string,
-): dataform.FileFormat {
+export function getFileFormatValueForIcebergTable(configFileFormat?: string): dataform.FileFormat {
   if (!configFileFormat) {
     // Default to PARQUET if fileFormat is undefined.
     return dataform.FileFormat.PARQUET;
@@ -344,9 +372,7 @@ export function getFileFormatValueForIcebergTable(
       return dataform.FileFormat.PARQUET;
 
     default:
-      throw new Error(
-        `File format ${configFileFormat} is not supported.`,
-      );
+      throw new Error(`File format ${configFileFormat} is not supported.`);
   }
 }
 
@@ -403,7 +429,7 @@ export function getEffectiveBucketName(
     return defaultBucketName;
   } else {
     throw new Error(
-      "When defining an Iceberg table, bucket name must be defined in workflow_settings.yaml or the config block."
+      "When defining an Iceberg table, bucket name must be defined in workflow_settings.yaml or the config block.",
     );
   }
 }
@@ -488,28 +514,39 @@ export function setOrValidateTableEnumType(table: dataform.ITable) {
   } else if (enumTypeFromStr !== null && table.enumType !== enumTypeFromStr) {
     throw new Error(
       `Table str type "${table.type}" and enumType "${tableTypeEnumToString(
-        table.enumType
-      )}" are not equivalent.`
+        table.enumType,
+      )}" are not equivalent.`,
     );
   }
 }
 
-export function extractActionDetailsFromFileName(
-  path: string
-): { fileExtension: string; fileNameAsTargetName: string } {
+export function extractActionDetailsFromFileName(path: string): {
+  fileExtension: string;
+  fileNameAsTargetName: string;
+} {
   const basename = Path.basename(path);
   const fileExtension = Path.fileExtension(path);
   return { fileExtension, fileNameAsTargetName: basename };
 }
 
 // Converts the config proto's target proto to the compiled graph proto's representation.
-export function configTargetToCompiledGraphTarget(configTarget: dataform.ActionConfig.Target) {
+export function configTargetToCompiledGraphTarget(
+  configTarget: dataform.ActionConfig.Target,
+  defaultLakehouseConfig?: dataform.IDefaultLakehouseConfig,
+) {
   const compiledGraphTarget: dataform.ITarget = { name: configTarget.name };
   if (configTarget.project) {
     compiledGraphTarget.database = configTarget.project;
   }
   if (configTarget.dataset) {
     compiledGraphTarget.schema = configTarget.dataset;
+  }
+  if (configTarget.lakehouse) {
+    compiledGraphTarget.schema = resolveLakehouseSchema(
+      configTarget.lakehouse,
+      defaultLakehouseConfig,
+      true,
+    );
   }
   if (configTarget.hasOwnProperty("includeDependentAssertions")) {
     compiledGraphTarget.includeDependentAssertions = configTarget.includeDependentAssertions;
@@ -530,7 +567,8 @@ export function actionConfigToCompiledGraphTarget(
     | dataform.ActionConfig.NotebookConfig
     | dataform.ActionConfig.DataPreparationConfig
     | dataform.ActionConfig.DataPreparationConfig.ErrorTableConfig
-    | dataform.ActionConfig.Target
+    | dataform.ActionConfig.Target,
+  defaultLakehouseConfig?: dataform.IDefaultLakehouseConfig,
 ): dataform.Target {
   const compiledGraphTarget = dataform.Target.create({ name: actionConfig.name });
   if ("project" in actionConfig && actionConfig.project !== undefined) {
@@ -544,6 +582,12 @@ export function actionConfigToCompiledGraphTarget(
   if ("dataset" in actionConfig && actionConfig.dataset !== undefined) {
     compiledGraphTarget.schema = actionConfig.dataset;
   }
+  if ("lakehouse" in actionConfig && actionConfig.lakehouse) {
+    const schema = resolveLakehouseSchema(actionConfig.lakehouse, defaultLakehouseConfig);
+    if (schema) {
+      compiledGraphTarget.schema = schema;
+    }
+  }
   return compiledGraphTarget;
 }
 
@@ -553,9 +597,12 @@ export function resolveActionsConfigFilename(configFilename: string, configPath:
 
 export function checkAssertionsForDependency(
   action: actionsWithDependencies,
-  resolvable: Resolvable
+  resolvable: Resolvable,
 ): dataform.Target {
-  const dependencyTarget = resolvableAsTarget(resolvable);
+  const dependencyTarget = resolvableAsTarget(
+    resolvable,
+    action.session.projectConfig?.defaultLakehouseConfig,
+  );
   if (
     !dependencyTarget.hasOwnProperty("includeDependentAssertions") &&
     !(action instanceof DataPreparation)
@@ -574,20 +621,20 @@ export function checkAssertionsForDependency(
       action.session.compileError(
         `Conflicting "includeDependentAssertions" properties are not allowed. Dependency ${dependencyTarget.name} has different values set for this property.`,
         action.getFileName(),
-        action.getTarget()
+        action.getTarget(),
       );
       return;
     }
   }
   action.includeAssertionsForDependency.set(
     dependencyTargetString,
-    dependencyTarget.includeDependentAssertions
+    dependencyTarget.includeDependentAssertions,
   );
   return dependencyTarget;
 }
 
-/** 
- * Multimap of resolvable targets to values. 
+/**
+ * Multimap of resolvable targets to values.
  * Allows the lookup by name/schema/database and their subsets.
  */
 export class ResolvableMap<T> {
@@ -596,7 +643,7 @@ export class ResolvableMap<T> {
   private byDatabaseAndName: Map<string, Map<string, T[]>> = new Map();
   private byDatabaseSchemaAndName: Map<string, Map<string, Map<string, T[]>>> = new Map();
 
-  public constructor(values?: Array<{ actionTarget: dataform.ITarget, value: T }>) {
+  public constructor(values?: Array<{ actionTarget: dataform.ITarget; value: T }>) {
     if (values) {
       for (const { actionTarget, value } of values) {
         this.set(actionTarget, value);
@@ -656,7 +703,7 @@ export class ResolvableMap<T> {
   private setBySchemaLevel(
     targetMap: Map<string, Map<string, T[]>>,
     actionTarget: dataform.ITarget,
-    value: T
+    value: T,
   ) {
     if (!targetMap.has(actionTarget.schema)) {
       targetMap.set(actionTarget.schema, new Map());
@@ -666,17 +713,157 @@ export class ResolvableMap<T> {
   }
 }
 
-export function snakeToCamelKeys(value: any): any {
+export function snakeToCamelKeys(value: any, preserveMapKeysFields: Set<string> = new Set()): any {
   if (Array.isArray(value)) {
-    return value.map(snakeToCamelKeys);
+    return value.map((item) => snakeToCamelKeys(item, preserveMapKeysFields));
   }
   if (value && typeof value === "object") {
     const out: { [key: string]: any } = {};
     for (const [key, val] of Object.entries(value)) {
       const camel = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-      out[camel] = snakeToCamelKeys(val);
+      out[camel] =
+        preserveMapKeysFields.has(camel) && val && typeof val === "object" && !Array.isArray(val)
+          ? { ...val }
+          : snakeToCamelKeys(val, preserveMapKeysFields);
     }
     return out;
   }
   return value;
+}
+
+// NOTE: These validation constants and rules are mirrored by the Cloud Dataform backend validator.
+// If one validator is updated, the other must also be updated to stay in sync.
+const MAX_JOB_LABELS_COUNT = 32;
+const MAX_JOB_LABEL_LENGTH = 63;
+const JOB_LABEL_KEY_REGEX = /^[a-z][a-z0-9_-]*$/;
+const JOB_LABEL_VALUE_REGEX = /^[a-z0-9_-]*$/;
+const RESERVED_JOB_LABEL_PREFIXES: readonly string[] = [
+  "dataform_",
+  "dataform-",
+  "dataprep-",
+  "gcp-",
+  "goog-",
+];
+const RESERVED_JOB_LABEL_KEYS: ReadonlySet<string> = new Set([
+  "bigquery-workflow",
+  "single-file-asset-type",
+  "origin",
+  "bq-dea",
+  "data-preparation-file-loader",
+]);
+
+/** Throws unless `labels` is null, undefined, or a plain (non-array) object. */
+function assertJobLabelsObject(
+  labels: unknown,
+  fieldName: string,
+): asserts labels is { [key: string]: unknown } | null | undefined {
+  if (labels != null && (typeof labels !== "object" || Array.isArray(labels))) {
+    throw new Error(`${fieldName} must be an object mapping string keys to string values.`);
+  }
+}
+
+/**
+ * Validates customer-supplied BigQuery job labels against BigQuery and Dataform constraints, and
+ * returns them as a new object with string values: numbers and booleans are converted to strings.
+ * `null` and `undefined` mean no labels. Throws an Error if any rule is violated.
+ */
+export function validateJobLabels(
+  labels: unknown,
+  fieldName: string = "jobLabels",
+): { [key: string]: string } {
+  assertJobLabelsObject(labels, fieldName);
+  if (labels == null) {
+    return {};
+  }
+  const entries = Object.entries(labels);
+  if (entries.length > MAX_JOB_LABELS_COUNT) {
+    throw new Error(
+      `Too many job labels in ${fieldName}: maximum allowed is ${MAX_JOB_LABELS_COUNT}, but got ${entries.length}.`,
+    );
+  }
+  const validatedLabels: { [key: string]: string } = {};
+  for (const [key, rawValue] of entries) {
+    if (
+      typeof rawValue !== "string" &&
+      typeof rawValue !== "number" &&
+      typeof rawValue !== "boolean"
+    ) {
+      throw new Error(
+        `Invalid job label value for key "${key}" in ${fieldName}: label values must be strings, numbers, or booleans.`,
+      );
+    }
+    const value = String(rawValue);
+    if (key.length === 0 || key.length > MAX_JOB_LABEL_LENGTH) {
+      throw new Error(
+        `Invalid job label key "${key}" in ${fieldName}: key length must be between 1 and ${MAX_JOB_LABEL_LENGTH} characters.`,
+      );
+    }
+    if (!JOB_LABEL_KEY_REGEX.test(key)) {
+      throw new Error(
+        `Invalid job label key "${key}" in ${fieldName}: keys must start with a lowercase ASCII letter and contain only lowercase ASCII letters, numbers, underscores, and hyphens.`,
+      );
+    }
+    const matchedPrefix = RESERVED_JOB_LABEL_PREFIXES.find((prefix) => key.startsWith(prefix));
+    if (matchedPrefix) {
+      throw new Error(
+        `Invalid job label key "${key}" in ${fieldName}: key cannot start with reserved prefix "${matchedPrefix}".`,
+      );
+    }
+    if (RESERVED_JOB_LABEL_KEYS.has(key)) {
+      throw new Error(
+        `Invalid job label key "${key}" in ${fieldName}: "${key}" is a reserved label key.`,
+      );
+    }
+    if (value.length > MAX_JOB_LABEL_LENGTH) {
+      throw new Error(
+        `Invalid job label value "${value}" for key "${key}" in ${fieldName}: value length must be at most ${MAX_JOB_LABEL_LENGTH} characters.`,
+      );
+    }
+    if (!JOB_LABEL_VALUE_REGEX.test(value)) {
+      throw new Error(
+        `Invalid job label value "${value}" for key "${key}" in ${fieldName}: values may contain only lowercase ASCII letters, numbers, underscores, and hyphens.`,
+      );
+    }
+    validatedLabels[key] = value;
+  }
+  return validatedLabels;
+}
+
+/**
+ * Resolves, validates, and sets `actionDescriptor.jobLabels` on an action proto by merging
+ * workflow settings `defaultJobLabels` with action-level `jobLabels` (where action-level keys
+ * override default keys). Records a compilation error on the session if validation fails, or
+ * rethrows the error if no session is provided.
+ */
+export function setActionJobLabels(
+  proto: {
+    actionDescriptor?: dataform.IActionDescriptor | null;
+    fileName?: string | null;
+    target?: dataform.ITarget | null;
+  },
+  actionJobLabels: unknown,
+  session?: Session,
+): void {
+  try {
+    assertJobLabelsObject(actionJobLabels, "jobLabels");
+    const jobLabels = validateJobLabels(
+      { ...(session?.projectConfig?.defaultJobLabels || {}), ...(actionJobLabels || {}) },
+      "jobLabels",
+    );
+    if (Object.keys(jobLabels).length === 0) {
+      return;
+    }
+    if (!proto.actionDescriptor) {
+      proto.actionDescriptor = {};
+    }
+    proto.actionDescriptor.jobLabels = jobLabels;
+  } catch (e) {
+    if (session) {
+      session.compileError(e, proto.fileName, proto.target);
+    } else {
+      // Without a session there is nowhere to record a compilation error, so rethrow instead of
+      // silently dropping the validation failure.
+      throw e;
+    }
+  }
 }

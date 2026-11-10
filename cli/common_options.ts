@@ -4,6 +4,7 @@ import * as path from "path";
 import yargs from "yargs";
 
 import { CREDENTIALS_FILENAME } from "df/cli/api/commands/credentials";
+import { DEFAULT_COMPILATION_TIMEOUT_MILLIS } from "df/cli/api/utils/constants";
 import { actuallyResolve, assertPathExists } from "df/cli/util";
 import { INamedOption } from "df/cli/yargswrapper";
 
@@ -16,8 +17,8 @@ export const projectDirOption: INamedOption<yargs.PositionalOptions, IProjectDir
   option: {
     describe: "The Dataform project directory.",
     default: ".",
-    coerce: actuallyResolve
-  }
+    coerce: actuallyResolve,
+  },
 };
 
 export const assertProjectDirExists = (argv: yargs.Arguments<IProjectDirArgs>) => {
@@ -26,7 +27,7 @@ export const assertProjectDirExists = (argv: yargs.Arguments<IProjectDirArgs>) =
   const workflowSettingsYamlPath = path.resolve(argv.projectDir, "workflow_settings.yaml");
   if (!fs.existsSync(dataformJsonPath) && !fs.existsSync(workflowSettingsYamlPath)) {
     throw new Error(
-      `${argv.projectDir} does not appear to be a dataform directory (missing workflow_settings.yaml file).`
+      `${argv.projectDir} does not appear to be a dataform directory (missing workflow_settings.yaml file).`,
     );
   }
 };
@@ -34,7 +35,7 @@ export const assertProjectDirExists = (argv: yargs.Arguments<IProjectDirArgs>) =
 // Splits repeated and comma-separated values into a flat list, e.g.
 // `--actions a,b --actions c` -> ["a", "b", "c"].
 export const splitCommas = (raw: string[] | null) =>
-  raw ? raw.map(value => value.split(",")).flat() : [];
+  raw ? raw.map((value) => value.split(",")).flat() : [];
 
 export interface IActionsArgs {
   actions?: string[];
@@ -43,10 +44,14 @@ export interface IActionsArgs {
 export const actionsOption: INamedOption<yargs.Options, IActionsArgs> = {
   name: "actions",
   option: {
-    describe: "A list of action names or patterns to run. Can include '*' wildcards.",
+    // No wildcard support: prune()'s matchPatterns() does exact matching on the action name or
+    // its fully-qualified `database.schema.name`.
+    describe:
+      "Actions to run (comma-separated or repeatable). Each entry is an action name or a " +
+      "fully-qualified database.schema.name target.",
     type: "array",
-    coerce: splitCommas
-  }
+    coerce: splitCommas,
+  },
 };
 
 export interface ICredentialsArgs extends IProjectDirArgs {
@@ -56,11 +61,12 @@ export interface ICredentialsArgs extends IProjectDirArgs {
 export const credentialsOption: INamedOption<yargs.Options, ICredentialsArgs> = {
   name: "credentials",
   option: {
-    describe: "The location of the credentials JSON file to use.",
-    default: CREDENTIALS_FILENAME
+    describe: "Path to the credentials JSON file to use.",
+    type: "string",
+    default: CREDENTIALS_FILENAME,
   },
   check: (argv: yargs.Arguments<ICredentialsArgs>) =>
-    actuallyResolve(argv.projectDir, argv.credentials)
+    actuallyResolve(argv.projectDir, argv.credentials),
 };
 
 export interface IJsonOutputArgs {
@@ -70,10 +76,10 @@ export interface IJsonOutputArgs {
 export const jsonOutputOption: INamedOption<yargs.Options, IJsonOutputArgs> = {
   name: "json",
   option: {
-    describe: "Outputs a JSON representation of the compiled project or test results.",
+    describe: "Outputs the result as JSON instead of human-readable text.",
     type: "boolean",
-    default: false
-  }
+    default: false,
+  },
 };
 
 export const coerceTimeout = (rawTimeoutString: string | null) =>
@@ -86,23 +92,20 @@ export interface ITimeoutArgs {
 export const timeoutOption: INamedOption<yargs.Options, ITimeoutArgs> = {
   name: "timeout",
   option: {
-    describe: "Duration to allow project compilation to complete. Examples: '1s', '10m', etc.",
+    describe: "Duration to allow project compilation to complete, e.g. '1s', '10m'.",
     type: "string",
     default: null,
-    coerce: coerceTimeout
-  }
+    coerce: coerceTimeout,
+  },
+  docs: { default: `\`'${DEFAULT_COMPILATION_TIMEOUT_MILLIS / 1000}s'\`` },
 };
 
 // It would be nice to use yargs' "implies" to implement this, but it doesn't work for some reason.
-export const requiresSelection = (
-  name: string,
-  actions: { name: string },
-  tags: { name: string }
-) => (argv: yargs.Arguments) => {
-  if (argv[name] && !(argv[actions.name] || argv[tags.name])) {
-    throw new Error(
-      `The --${name} flag should only be supplied along with --${actions.name} or --${tags.name}.`
-    );
-  }
-};
-
+export const requiresSelection =
+  (name: string, actions: { name: string }, tags: { name: string }) => (argv: yargs.Arguments) => {
+    if (argv[name] && !(argv[actions.name] || argv[tags.name])) {
+      throw new Error(
+        `The --${name} flag should only be supplied along with --${actions.name} or --${tags.name}.`,
+      );
+    }
+  };

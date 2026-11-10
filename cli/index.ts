@@ -1,14 +1,6 @@
-import {
-  compileCommand,
-  createHelpCommand,
-  formatCommand,
-  initCommand,
-  initCredsCommand,
-  installCommand,
-  runCommand,
-  testCommand
-} from "df/cli/commands";
+import { CLI_COMMANDS, createHelpCommand } from "df/cli/commands";
 import { printError } from "df/cli/console";
+import { handleTerminationSignals } from "df/cli/signals";
 import { createYargsCli } from "df/cli/yargswrapper";
 
 process.on("unhandledRejection", async (reason: any) => {
@@ -16,17 +8,9 @@ process.on("unhandledRejection", async (reason: any) => {
 });
 
 export function runCli() {
-  const commands = [
-    initCommand,
-    installCommand,
-    initCredsCommand,
-    compileCommand,
-    testCommand,
-    runCommand,
-    formatCommand
-  ];
+  handleTerminationSignals();
 
   createYargsCli({
-    commands: [createHelpCommand(commands), ...commands]
+    commands: [createHelpCommand(CLI_COMMANDS), ...CLI_COMMANDS],
   });
 }

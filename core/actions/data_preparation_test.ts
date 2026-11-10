@@ -9,7 +9,7 @@ import { TmpDirFixture } from "df/testing/fixtures";
 import {
   coreExecutionRequestFromPath,
   runMainInVm,
-  VALID_WORKFLOW_SETTINGS_YAML
+  VALID_WORKFLOW_SETTINGS_YAML,
 } from "df/testing/run_core";
 
 suite("data preparation", ({ afterEach }) => {
@@ -18,7 +18,7 @@ suite("data preparation", ({ afterEach }) => {
   suite("data preparations", () => {
     const createSimpleDataPreparationProject = (
       workflowSettingsYaml = VALID_WORKFLOW_SETTINGS_YAML,
-      writeActionsYaml = true
+      writeActionsYaml = true,
     ): string => {
       const projectDir = tmpDirFixture.createNewTmpDir();
       fs.writeFileSync(path.join(projectDir, "workflow_settings.yaml"), workflowSettingsYaml);
@@ -30,7 +30,7 @@ suite("data preparation", ({ afterEach }) => {
           `
 actions:
 - dataPreparation:
-    filename: data_preparation.dp.yaml`
+    filename: data_preparation.dp.yaml`,
         );
       }
       return projectDir;
@@ -43,7 +43,7 @@ actions:
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.dp.yaml"),
-        dataPreparationYaml
+        dataPreparationYaml,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -55,31 +55,31 @@ actions:
             target: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "data_preparation"
+              name: "data_preparation",
             },
             canonicalTarget: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "data_preparation"
+              name: "data_preparation",
             },
             targets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "data_preparation"
-              }
+                name: "data_preparation",
+              },
             ],
             canonicalTargets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "data_preparation"
-              }
+                name: "data_preparation",
+              },
             ],
             fileName: "definitions/data_preparation.dp.yaml",
-            dataPreparationYaml: ""
-          }
-        ])
+            dataPreparationYaml: "",
+          },
+        ]),
       );
     });
 
@@ -110,7 +110,7 @@ nodes:
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.dp.yaml"),
-        dataPreparationYaml
+        dataPreparationYaml,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -122,31 +122,31 @@ nodes:
             target: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "data_preparation"
+              name: "data_preparation",
             },
             canonicalTarget: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "data_preparation"
+              name: "data_preparation",
             },
             targets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "data_preparation"
-              }
+                name: "data_preparation",
+              },
             ],
             canonicalTargets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "data_preparation"
-              }
+                name: "data_preparation",
+              },
             ],
             fileName: "definitions/data_preparation.dp.yaml",
-            dataPreparationYaml: dumpYaml(loadYaml(dataPreparationYaml))
-          }
-        ])
+            dataPreparationYaml: dumpYaml(loadYaml(dataPreparationYaml)),
+          },
+        ]),
       );
     });
 
@@ -173,7 +173,7 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.sqlx"),
-        dataPreparationSqlx
+        dataPreparationSqlx,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -185,40 +185,40 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
             target: {
               database: "prj",
               schema: "ds",
-              name: "dest"
+              name: "dest",
             },
             canonicalTarget: {
               database: "prj",
               schema: "ds",
-              name: "dest"
+              name: "dest",
             },
             targets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "dest"
+                name: "dest",
               },
               {
                 database: "errorPrj",
                 schema: "errorDs",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             canonicalTargets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "dest"
+                name: "dest",
               },
               {
                 database: "errorPrj",
                 schema: "errorDs",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             fileName: "definitions/data_preparation.sqlx",
             load: {
-              replace: {}
+              replace: {},
             },
             query: `FROM x
 -- Ensure y is positive
@@ -227,11 +227,11 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
             errorTable: {
               database: "errorPrj",
               schema: "errorDs",
-              name: "errorTable"
+              name: "errorTable",
             },
-            errorTableRetentionDays: 0
-          }
-        ])
+            errorTableRetentionDays: 0,
+          },
+        ]),
       );
     });
 
@@ -256,7 +256,7 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/this_is_the_file_name.sqlx"),
-        dataPreparationSqlx
+        dataPreparationSqlx,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -268,40 +268,40 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
             target: {
               database: "prj",
               schema: "ds",
-              name: "this_is_the_file_name"
+              name: "this_is_the_file_name",
             },
             canonicalTarget: {
               database: "prj",
               schema: "ds",
-              name: "this_is_the_file_name"
+              name: "this_is_the_file_name",
             },
             targets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "this_is_the_file_name"
+                name: "this_is_the_file_name",
               },
               {
                 database: "errorPrj",
                 schema: "errorDs",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             canonicalTargets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "this_is_the_file_name"
+                name: "this_is_the_file_name",
               },
               {
                 database: "errorPrj",
                 schema: "errorDs",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             fileName: "definitions/this_is_the_file_name.sqlx",
             load: {
-              replace: {}
+              replace: {},
             },
             query: `FROM x
 |>  /* @@VALIDATION */ WHERE  y > 0
@@ -309,11 +309,11 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
             errorTable: {
               database: "errorPrj",
               schema: "errorDs",
-              name: "errorTable"
+              name: "errorTable",
             },
-            errorTableRetentionDays: 0
-          }
-        ])
+            errorTableRetentionDays: 0,
+          },
+        ]),
       );
     });
 
@@ -338,7 +338,7 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/this_is_the_file_name.dp.sqlx"),
-        dataPreparationSqlx
+        dataPreparationSqlx,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -350,40 +350,40 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
             target: {
               database: "prj",
               schema: "ds",
-              name: "this_is_the_file_name"
+              name: "this_is_the_file_name",
             },
             canonicalTarget: {
               database: "prj",
               schema: "ds",
-              name: "this_is_the_file_name"
+              name: "this_is_the_file_name",
             },
             targets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "this_is_the_file_name"
+                name: "this_is_the_file_name",
               },
               {
                 database: "errorPrj",
                 schema: "errorDs",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             canonicalTargets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "this_is_the_file_name"
+                name: "this_is_the_file_name",
               },
               {
                 database: "errorPrj",
                 schema: "errorDs",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             fileName: "definitions/this_is_the_file_name.dp.sqlx",
             load: {
-              replace: {}
+              replace: {},
             },
             query: `FROM x
 |>  /* @@VALIDATION */ WHERE  y > 0
@@ -391,11 +391,11 @@ $\{when(true, "|> SELECT *", "|> SELECT 1")\}
             errorTable: {
               database: "errorPrj",
               schema: "errorDs",
-              name: "errorTable"
+              name: "errorTable",
             },
-            errorTableRetentionDays: 0
-          }
-        ])
+            errorTableRetentionDays: 0,
+          },
+        ]),
       );
     });
 
@@ -421,15 +421,15 @@ FROM x
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.sqlx"),
-        dataPreparationSqlx
+        dataPreparationSqlx,
       );
 
       const coreExecutionRequest = coreExecutionRequestFromPath(
         projectDir,
         dataform.ProjectConfig.create({
           defaultDatabase: "projectOverride",
-          defaultSchema: "datasetOverride"
-        })
+          defaultSchema: "datasetOverride",
+        }),
       );
 
       const result = runMainInVm(coreExecutionRequest);
@@ -441,50 +441,50 @@ FROM x
             target: {
               database: "compilation_override_project",
               schema: "compilation_override_dataset",
-              name: "dest"
+              name: "dest",
             },
             canonicalTarget: {
               database: "compilation_override_project",
               schema: "compilation_override_dataset",
-              name: "dest"
+              name: "dest",
             },
             targets: [
               {
                 database: "compilation_override_project",
                 schema: "compilation_override_dataset",
-                name: "dest"
+                name: "dest",
               },
               {
                 database: "projectOverride",
                 schema: "datasetOverride",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             canonicalTargets: [
               {
                 database: "compilation_override_project",
                 schema: "compilation_override_dataset",
-                name: "dest"
+                name: "dest",
               },
               {
                 database: "projectOverride",
                 schema: "datasetOverride",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             fileName: "definitions/data_preparation.sqlx",
             query: "FROM x\n|> SELECT *",
             load: {
-              append: {}
+              append: {},
             },
             errorTable: {
               database: "projectOverride",
               schema: "datasetOverride",
-              name: "errorTable"
+              name: "errorTable",
             },
-            errorTableRetentionDays: 0
-          }
-        ])
+            errorTableRetentionDays: 0,
+          },
+        ]),
       );
     });
 
@@ -509,7 +509,7 @@ FROM x
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.sqlx"),
-        dataPreparationSqlx
+        dataPreparationSqlx,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -521,52 +521,52 @@ FROM x
             target: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "dest"
+              name: "dest",
             },
             canonicalTarget: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "dest"
+              name: "dest",
             },
             targets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "dest"
+                name: "dest",
               },
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             canonicalTargets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "dest"
+                name: "dest",
               },
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "errorTable"
-              }
+                name: "errorTable",
+              },
             ],
             fileName: "definitions/data_preparation.sqlx",
             load: {
               maximum: {
-                columnName: "xyz"
-              }
+                columnName: "xyz",
+              },
             },
             query: "FROM x\n|> SELECT *",
             errorTable: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "errorTable"
+              name: "errorTable",
             },
-            errorTableRetentionDays: 0
-          }
-        ])
+            errorTableRetentionDays: 0,
+          },
+        ]),
       );
     });
 
@@ -608,7 +608,7 @@ nodes:
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.dp.yaml"),
-        dataPreparationYaml
+        dataPreparationYaml,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -620,31 +620,31 @@ nodes:
             target: {
               database: "prj",
               schema: "ds",
-              name: "dest"
+              name: "dest",
             },
             canonicalTarget: {
               database: "prj",
               schema: "ds",
-              name: "dest"
+              name: "dest",
             },
             targets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "dest"
-              }
+                name: "dest",
+              },
             ],
             canonicalTargets: [
               {
                 database: "prj",
                 schema: "ds",
-                name: "dest"
-              }
+                name: "dest",
+              },
             ],
             fileName: "definitions/data_preparation.dp.yaml",
-            dataPreparationYaml: dumpYaml(loadYaml(dataPreparationYaml))
-          }
-        ])
+            dataPreparationYaml: dumpYaml(loadYaml(dataPreparationYaml)),
+          },
+        ]),
       );
     });
 
@@ -708,7 +708,7 @@ nodes:
 
       fs.writeFileSync(
         path.join(projectDir, "definitions/data_preparation.dp.yaml"),
-        dataPreparationYaml
+        dataPreparationYaml,
       );
 
       const resolvedYaml = `
@@ -775,31 +775,31 @@ nodes:
             target: {
               database: "defaultProject_projectSuffix",
               schema: "defaultDataset_datasetSuffix",
-              name: "tablePrefix_dest"
+              name: "tablePrefix_dest",
             },
             canonicalTarget: {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "dest"
+              name: "dest",
             },
             targets: [
               {
                 database: "defaultProject_projectSuffix",
                 schema: "defaultDataset_datasetSuffix",
-                name: "tablePrefix_dest"
-              }
+                name: "tablePrefix_dest",
+              },
             ],
             canonicalTargets: [
               {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "dest"
-              }
+                name: "dest",
+              },
             ],
             fileName: "definitions/data_preparation.dp.yaml",
-            dataPreparationYaml: dumpYaml(loadYaml(resolvedYaml))
-          }
-        ])
+            dataPreparationYaml: dumpYaml(loadYaml(resolvedYaml)),
+          },
+        ]),
       );
     });
 
@@ -823,66 +823,127 @@ FROM x
 `;
 
       fs.writeFileSync(
-          path.join(projectDir, "definitions/data_preparation.sqlx"),
-          dataPreparationSqlx
+        path.join(projectDir, "definitions/data_preparation.sqlx"),
+        dataPreparationSqlx,
       );
 
       const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
       expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
       expect(asPlainObject(result.compile.compiledGraph.dataPreparations)).deep.equals(
-          asPlainObject([
-            {
-              target: {
+        asPlainObject([
+          {
+            target: {
+              database: "defaultProject",
+              schema: "defaultDataset",
+              name: "dest",
+            },
+            canonicalTarget: {
+              database: "defaultProject",
+              schema: "defaultDataset",
+              name: "dest",
+            },
+            targets: [
+              {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "dest"
+                name: "dest",
               },
-              canonicalTarget: {
+              {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "dest"
+                name: "errorTable",
               },
-              targets: [
-                {
-                  database: "defaultProject",
-                  schema: "defaultDataset",
-                  name: "dest"
-                },
-                {
-                  database: "defaultProject",
-                  schema: "defaultDataset",
-                  name: "errorTable"
-                }
-              ],
-              canonicalTargets: [
-                {
-                  database: "defaultProject",
-                  schema: "defaultDataset",
-                  name: "dest"
-                },
-                {
-                  database: "defaultProject",
-                  schema: "defaultDataset",
-                  name: "errorTable"
-                }
-              ],
-              fileName: "definitions/data_preparation.sqlx",
-              load: {
-                merge: {
-                  uniqueKey: ["a", "b"]
-                }
-              },
-              query: "FROM x\n|> SELECT *",
-              errorTable: {
+            ],
+            canonicalTargets: [
+              {
                 database: "defaultProject",
                 schema: "defaultDataset",
-                name: "errorTable"
+                name: "dest",
               },
-              errorTableRetentionDays: 0
-            }
-          ])
+              {
+                database: "defaultProject",
+                schema: "defaultDataset",
+                name: "errorTable",
+              },
+            ],
+            fileName: "definitions/data_preparation.sqlx",
+            load: {
+              merge: {
+                uniqueKey: ["a", "b"],
+              },
+            },
+            query: "FROM x\n|> SELECT *",
+            errorTable: {
+              database: "defaultProject",
+              schema: "defaultDataset",
+              name: "errorTable",
+            },
+            errorTableRetentionDays: 0,
+          },
+        ]),
       );
+    });
+
+    test(`data preparation supports defaultJobLabels and jobLabels in actions.yaml and sqlx`, () => {
+      const workflowSettingsYaml = `
+defaultProject: defaultProject
+defaultDataset: defaultDataset
+defaultLocation: US
+defaultJobLabels:
+  env: dev
+  team: dataprep_team
+`;
+      const projectDir = createSimpleDataPreparationProject(workflowSettingsYaml, false);
+      fs.writeFileSync(
+        path.join(projectDir, "definitions/actions.yaml"),
+        `
+actions:
+- dataPreparation:
+    filename: data_preparation.dp.yaml
+    jobLabels:
+      env: prod
+      cost_center: finance`,
+      );
+      fs.writeFileSync(path.join(projectDir, "definitions/data_preparation.dp.yaml"), "\n");
+      fs.writeFileSync(
+        path.join(projectDir, "definitions/sqlx_dataprep.sqlx"),
+        `
+config {
+  type: "dataPreparation",
+  name: "dest",
+  jobLabels: {
+    env: "staging",
+  },
+}
+FROM x
+|> SELECT *
+`,
+      );
+
+      const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
+
+      expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
+      const dpByFile = new Map(
+        result.compile.compiledGraph.dataPreparations.map((dp) => [dp.fileName, dp]),
+      );
+      expect(
+        asPlainObject(dpByFile.get("definitions/data_preparation.dp.yaml")?.actionDescriptor),
+      ).deep.equals({
+        jobLabels: {
+          env: "prod",
+          team: "dataprep_team",
+          cost_center: "finance",
+        },
+      });
+      expect(
+        asPlainObject(dpByFile.get("definitions/sqlx_dataprep.sqlx")?.actionDescriptor),
+      ).deep.equals({
+        jobLabels: {
+          env: "staging",
+          team: "dataprep_team",
+        },
+      });
     });
   });
 });

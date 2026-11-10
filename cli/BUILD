@@ -1,10 +1,12 @@
-load("//tools:ts_library.bzl", "ts_library")
-load("//tools/common:copy.bzl", "copy_file")
-load("//:version.bzl", "DF_VERSION")
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
 load("//testing:index.bzl", "ts_test_suite")
-load("//tools:node_modules.bzl", "node_modules")
+load("//tools:ts_library.bzl", "ts_library")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "README.md",
+])
 
 ts_library(
     name = "cli",
@@ -25,33 +27,27 @@ ts_library(
         "credentials.ts",
         "index.ts",
         "project_config_options.ts",
+        "signals.ts",
         "util.ts",
         "yargswrapper.ts",
     ],
     deps = [
+        "//:node_modules/@types/glob",
+        "//:node_modules/@types/long",
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/readline-sync",
+        "//:node_modules/@types/yargs",
+        "//:node_modules/chokidar",
+        "//:node_modules/glob",
+        "//:node_modules/parse-duration",
+        "//:node_modules/readline-sync",
+        "//:node_modules/untildify",
+        "//:node_modules/yargs",
         "//cli/api",
         "//cli/vm",
         "//core",
         "//protos:ts",
         "//sqlx:format",
-        "@npm//@types/glob",
-        "@npm//@types/long",
-        "@npm//@types/node",
-        "@npm//@types/readline-sync",
-        "@npm//@types/yargs",
-        "@npm//chokidar",
-        "@npm//glob",
-        "@npm//parse-duration",
-        "@npm//readline-sync",
-        "@npm//untildify",
-        "@npm//yargs",
-    ],
-)
-
-node_modules(
-    name = "node_modules",
-    deps = [
-        "//packages/@dataform/cli:package_tar",
     ],
 )
 
@@ -59,92 +55,143 @@ ts_library(
     name = "index_test_base",
     srcs = ["index_test_base.ts"],
     deps = [
+        "//:node_modules/@types/fs-extra",
+        "//:node_modules/@types/js-yaml",
+        "//:node_modules/@types/node",
+        "//:node_modules/fs-extra",
+        "//:node_modules/js-yaml",
         "//cli",
         "//core",
         "//protos:ts",
         "//testing",
-        "@npm//@types/fs-extra",
-        "@npm//@types/js-yaml",
-        "@npm//@types/node",
-        "@npm//fs-extra",
-        "@npm//js-yaml",
     ],
 )
 
 ts_test_suite(
     name = "tests",
     srcs = [
+        "console_test.ts",
+        "credentials_test.ts",
+        "index_compile_test.ts",
         "index_help_test.ts",
         "index_init_test.ts",
         "index_project_test.ts",
-        "index_compile_test.ts",
-        "util_test.ts",
+        "signals_test.ts",
+        "tests/bin_test.ts",
         "tests/jit/jit_build_test.ts",
         "tests/jit/jit_run_test.ts",
+        "util_test.ts",
     ],
     data = [
-        ":node_modules",
+        "//packages/@dataform/cli:bundle",
+        "//packages/@dataform/cli:json",
+        "//packages/@dataform/cli:worker_bundle",
         "//packages/@dataform/core:package_tar",
-        "@nodejs//:node",
-        "@nodejs//:npm",
     ],
+    include_npm = True,
     deps = [
         ":index_test_base",
+        "//:node_modules/@types/chai",
+        "//:node_modules/@types/fs-extra",
+        "//:node_modules/@types/js-yaml",
+        "//:node_modules/@types/long",
+        "//:node_modules/@types/node",
+        "//:node_modules/chai",
+        "//:node_modules/fs-extra",
+        "//:node_modules/js-yaml",
+        "//:node_modules/ts-mockito",
         "//cli",
         "//cli/api",
         "//core",
         "//protos:ts",
         "//testing",
-        "@npm//@types/chai",
-        "@npm//@types/fs-extra",
-        "@npm//@types/js-yaml",
-        "@npm//@types/long",
-        "@npm//@types/node",
-        "@npm//chai",
-        "@npm//fs-extra",
-        "@npm//js-yaml",
-        "@npm//ts-mockito",
     ],
 )
 
 ts_test_suite(
     name = "integration_tests",
     srcs = [
+        "index_compile_isolated_environment_test.ts",
+        "index_location_test.ts",
         "index_run_e2e_test.ts",
-        "tests/jit/index_jit_main_test.ts",
         "tests/jit/index_jit_advanced_test.ts",
+        "tests/jit/index_jit_core_version_test.ts",
         "tests/jit/index_jit_dependency_test.ts",
-        "tests/jit/index_jit_runtime_test.ts"
+        "tests/jit/index_jit_main_test.ts",
+        "tests/jit/index_jit_runtime_test.ts",
     ],
     data = [
-        ":node_modules",
+        "//packages/@dataform/cli:bundle",
+        "//packages/@dataform/cli:json",
+        "//packages/@dataform/cli:worker_bundle",
         "//packages/@dataform/core:package_tar",
-        "//test_credentials:bigquery.json",
-        "@nodejs//:node",
-        "@nodejs//:npm",
+        "//test_credentials:bigquery_credentials",
     ],
+    # index_test_base runs `npm` directly, and the CLI runs `npm i` when dataformCoreVersion is set.
+    include_npm = True,
     tags = ["integration"],
     deps = [
         ":index_test_base",
+        "//:node_modules/@types/chai",
+        "//:node_modules/@types/fs-extra",
+        "//:node_modules/@types/js-yaml",
+        "//:node_modules/@types/long",
+        "//:node_modules/@types/node",
+        "//:node_modules/chai",
+        "//:node_modules/fs-extra",
+        "//:node_modules/js-yaml",
+        "//:node_modules/ts-mockito",
         "//cli",
         "//cli/api",
         "//core",
         "//protos:ts",
         "//testing",
-        "@npm//@types/chai",
-        "@npm//@types/fs-extra",
-        "@npm//@types/js-yaml",
-        "@npm//@types/long",
-        "@npm//@types/node",
-        "@npm//chai",
-        "@npm//fs-extra",
-        "@npm//js-yaml",
-        "@npm//ts-mockito",
     ],
 )
 
-copy_file(
-    name = "readme",
-    src = "//:readme.md",
-    out = "readme.md",
+# Generates the parts of README.md derived from the CLI command definitions. Kept separate from
+# :cli so that the generator isn't bundled into @dataform/cli.
+ts_library(
+    name = "readme_generator",
+    srcs = [
+        "readme_generator.ts",
+        "update_readme.ts",
+    ],
+    deps = [
+        ":cli",
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/yargs",
+    ],
+)
+
+# Regenerates the generated blocks of README.md: bazel run //cli:update_readme
+js_binary(
+    name = "update_readme",
+    data = [
+        ":readme_generator",
+        "//:node_modules/source-map-support",
+        "//testing:resolver-patch",
+    ],
+    entry_point = ":update_readme.js",
+    node_options = [
+        "--require=./testing/resolver-patch.js",
+        "--require=source-map-support/register",
+    ],
+)
+
+ts_test_suite(
+    name = "readme_tests",
+    srcs = [
+        "readme_generated_test.ts",
+        "readme_generator_test.ts",
+    ],
+    data = ["README.md"],
+    deps = [
+        ":readme_generator",
+        "//:node_modules/@types/chai",
+        "//:node_modules/@types/node",
+        "//:node_modules/chai",
+        "//cli",
+        "//testing",
+    ],
 )

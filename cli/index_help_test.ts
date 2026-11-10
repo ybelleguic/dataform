@@ -24,7 +24,9 @@ suite("help command", () => {
     const output = result.stdout;
     expect(output).to.include("Create a new dataform project.");
     expect(output).to.include("--iceberg");
-    expect(output).to.include("Initialize the project with workflow-level Iceberg tables configuration.");
+    expect(output).to.include(
+      "Initialize the project with workflow-level Iceberg tables configuration.",
+    );
   });
 
   test("shows help for 'install' command", async () => {
@@ -39,7 +41,9 @@ suite("help command", () => {
     const result = await runCli("help", ["init-creds"]);
     expect(result.exitCode).equals(0);
     const output = result.stdout;
-    expect(output).to.include("Create a .df-credentials.json file for Dataform to use when accessing BigQuery.");
+    expect(output).to.include(
+      "Create a .df-credentials.json file for Dataform to use when accessing BigQuery.",
+    );
     expect(output).to.include("[project-dir]");
     expect(output).to.include("--test-connection");
     expect(output).to.include("If true, a test query will be run using your final credentials.");
@@ -81,6 +85,8 @@ suite("help command", () => {
     expect(output).to.include("--include-dependents");
     expect(output).to.include("--tags");
     expect(output).to.include("--job-labels");
+    expect(output).to.include("--emit-lineage");
+    expect(output).to.include("docs/lineage.md");
   });
 
   test("shows help for 'format' command", async () => {
@@ -89,9 +95,11 @@ suite("help command", () => {
     const output = result.stdout;
     expect(output).to.include("Format the dataform project's files.");
     expect(output).to.include("--check");
-    expect(output).to.include("Check if files are formatted correctly without modifying them.");
+    expect(output).to.include(
+      "Checks whether files are already formatted correctly, without modifying them.",
+    );
     expect(output).to.include("--actions");
     expect(output).to.include("--ignore-js-files");
-    expect(output).to.include("If set, the formatter will not consider javascript files (.js)");
+    expect(output).to.include("If set, only formats .sqlx files (skips .js files).");
   });
 });

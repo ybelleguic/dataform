@@ -1,18 +1,25 @@
-import {expect} from "chai";
+import { expect } from "chai";
 import {
+  getCallerFile,
   getConnectionForIcebergTable,
   getEffectiveBucketName,
   getEffectiveTableFolderRoot,
   getEffectiveTableFolderSubpath,
   getFileFormatValueForIcebergTable,
   getStorageUriForIcebergTable,
+  resolvableAsActionConfigTarget,
+  resolvableAsTarget,
+  setActionJobLabels,
+  snakeToCamelKeys,
+  toResolvable,
   validateConnectionFormat,
+  validateJobLabels,
   validateNoMixedCompilationMode,
   validateStorageUriFormat,
-} from './utils';
+} from "./utils";
 
-import {dataform} from "df/protos/ts";
-import {suite, test} from 'df/testing';
+import { dataform } from "df/protos/ts";
+import { suite, test } from "df/testing";
 
 /**
  * Executes a function and returns the Error if one is thrown, otherwise returns undefined.
@@ -48,254 +55,701 @@ function assertNoThrow(testFn: () => void) {
 function assertThrowsWithMessage(testFn: () => void, expectedMessage: string) {
   const error = getThrownError(testFn);
   if (!error) {
-    throw new Error(`Expected an error to be thrown with message "${expectedMessage}", but no error was caught.`);
+    throw new Error(
+      `Expected an error to be thrown with message "${expectedMessage}", but no error was caught.`,
+    );
   }
   if (error.message !== expectedMessage) {
     throw new Error(`Expected error message "${expectedMessage}", but got "${error.message}"`);
   }
 }
 
-suite('Dataform Utility Validations', () => {
-  const CONNECTION_ERROR_MSG = 'The connection must be in the format `{project}.{location}.{connection_id}` or `projects/{project}/locations/{location}/connections/{connection_id}`, or be set to `DEFAULT`.';
-  const STORAGE_ERROR_MSG = 'The storage URI must be in the format `gs://{bucket_name}/{path_to_data}`.';
+suite("Dataform Utility Validations", () => {
+  const CONNECTION_ERROR_MSG =
+    "The connection must be in the format `{project}.{location}.{connection_id}` or `projects/{project}/locations/{location}/connections/{connection_id}`, or be set to `DEFAULT`.";
+  const STORAGE_ERROR_MSG =
+    "The storage URI must be in the format `gs://{bucket_name}/{path_to_data}`.";
 
-  suite('validateConnectionFormat', () => {
+  suite("validateConnectionFormat", () => {
     test('does not throw for the "DEFAULT" connection', () => {
-      assertNoThrow(() => validateConnectionFormat('DEFAULT'));
+      assertNoThrow(() => validateConnectionFormat("DEFAULT"));
     });
 
-    test('does not throw for a valid dot-separated connection format', () => {
-      assertNoThrow(() => validateConnectionFormat('my-project.us-central1.my-connection'));
-      assertNoThrow(() => validateConnectionFormat('gcp-proj-123.europe-west4.dataform-conn_id'));
+    test("does not throw for a valid dot-separated connection format", () => {
+      assertNoThrow(() => validateConnectionFormat("my-project.us-central1.my-connection"));
+      assertNoThrow(() => validateConnectionFormat("gcp-proj-123.europe-west4.dataform-conn_id"));
     });
 
-    test('does not throw for a valid resource-formatted connection format', () => {
-      assertNoThrow(() => validateConnectionFormat('projects/my-project/locations/us-central1/connections/my-connection'));
-      assertNoThrow(() => validateConnectionFormat('projects/gcp-proj-123/locations/europe-west4/connections/dataform-conn_id'));
+    test("does not throw for a valid resource-formatted connection format", () => {
+      assertNoThrow(() =>
+        validateConnectionFormat(
+          "projects/my-project/locations/us-central1/connections/my-connection",
+        ),
+      );
+      assertNoThrow(() =>
+        validateConnectionFormat(
+          "projects/gcp-proj-123/locations/europe-west4/connections/dataform-conn_id",
+        ),
+      );
     });
 
-    test('throws for an empty connection string', () => {
-      assertThrowsWithMessage(() => validateConnectionFormat(''), CONNECTION_ERROR_MSG);
+    test("throws for an empty connection string", () => {
+      assertThrowsWithMessage(() => validateConnectionFormat(""), CONNECTION_ERROR_MSG);
     });
 
-    test('throws for an invalid dot-separated format (too few parts)', () => {
-      assertThrowsWithMessage(() => validateConnectionFormat('my-project.my-connection'), CONNECTION_ERROR_MSG);
+    test("throws for an invalid dot-separated format (too few parts)", () => {
+      assertThrowsWithMessage(
+        () => validateConnectionFormat("my-project.my-connection"),
+        CONNECTION_ERROR_MSG,
+      );
     });
 
-    test('throws for an invalid dot-separated format (too many parts)', () => {
-      assertThrowsWithMessage(() => validateConnectionFormat('a.b.c.d'), CONNECTION_ERROR_MSG);
+    test("throws for an invalid dot-separated format (too many parts)", () => {
+      assertThrowsWithMessage(() => validateConnectionFormat("a.b.c.d"), CONNECTION_ERROR_MSG);
     });
 
-    test('throws for an invalid resource format (missing segment value)', () => {
-      assertThrowsWithMessage(() => validateConnectionFormat('projects/my-project/locations//connections/my-connection'), CONNECTION_ERROR_MSG);
+    test("throws for an invalid resource format (missing segment value)", () => {
+      assertThrowsWithMessage(
+        () => validateConnectionFormat("projects/my-project/locations//connections/my-connection"),
+        CONNECTION_ERROR_MSG,
+      );
     });
 
-    test('throws for an invalid resource format (incorrect separators)', () => {
-      assertThrowsWithMessage(() => validateConnectionFormat('projects/my-project/locations-us-central1/connections/my-connection'), CONNECTION_ERROR_MSG);
+    test("throws for an invalid resource format (incorrect separators)", () => {
+      assertThrowsWithMessage(
+        () =>
+          validateConnectionFormat(
+            "projects/my-project/locations-us-central1/connections/my-connection",
+          ),
+        CONNECTION_ERROR_MSG,
+      );
     });
 
-    test('throws for a completely unmatching string', () => {
-      assertThrowsWithMessage(() => validateConnectionFormat('some-other-format'), CONNECTION_ERROR_MSG);
-    });
-  });
-
-  suite('validateStorageUriFormat', () => {
-    test('does not throw for a valid gs:// URI', () => {
-      assertNoThrow(() => validateStorageUriFormat('gs://my-bucket/path/to/data'));
-    });
-
-    test('does not throw for a valid gs:// URI with just a bucket and root path', () => {
-      assertNoThrow(() => validateStorageUriFormat('gs://another-bucket/file.csv'));
-    });
-
-    test('throws for a URI missing the gs:// prefix', () => {
-      assertThrowsWithMessage(() => validateStorageUriFormat('my-bucket/path/to/data'), STORAGE_ERROR_MSG);
-    });
-
-    test('throws for an incorrect scheme prefix', () => {
-      assertThrowsWithMessage(() => validateStorageUriFormat('s3://my-bucket/path'), STORAGE_ERROR_MSG);
-    });
-
-    test('throws for a URI with no bucket name', () => {
-      assertThrowsWithMessage(() => validateStorageUriFormat('gs:///path/to/data'), STORAGE_ERROR_MSG);
-    });
-
-    test('throws for a URI with no path after the bucket', () => {
-      assertThrowsWithMessage(() => validateStorageUriFormat('gs://my-bucket/'), STORAGE_ERROR_MSG);
-    });
-
-    test('throws for an empty storage URI string', () => {
-      assertThrowsWithMessage(() => validateStorageUriFormat(''), STORAGE_ERROR_MSG);
+    test("throws for a completely unmatching string", () => {
+      assertThrowsWithMessage(
+        () => validateConnectionFormat("some-other-format"),
+        CONNECTION_ERROR_MSG,
+      );
     });
   });
 
-  suite('getEffectiveBucketName', () => {
-    test('returns configBucketName if provided', () => {
-      expect(getEffectiveBucketName('ws-default', 'config-bucket')).to.equal('config-bucket');
+  suite("validateStorageUriFormat", () => {
+    test("does not throw for a valid gs:// URI", () => {
+      assertNoThrow(() => validateStorageUriFormat("gs://my-bucket/path/to/data"));
     });
 
-    test('returns defaultBucketName when configBucketName is undefined', () => {
-      expect(getEffectiveBucketName('ws-default', undefined)).to.equal('ws-default');
+    test("does not throw for a valid gs:// URI with just a bucket and root path", () => {
+      assertNoThrow(() => validateStorageUriFormat("gs://another-bucket/file.csv"));
     });
 
-    test('returns defaultBucketName when configBucketName is an empty string', () => {
-      expect(getEffectiveBucketName('ws-default', '')).to.equal('ws-default');
+    test("throws for a URI missing the gs:// prefix", () => {
+      assertThrowsWithMessage(
+        () => validateStorageUriFormat("my-bucket/path/to/data"),
+        STORAGE_ERROR_MSG,
+      );
     });
 
-    test('throws error if both configBucketName and defaultBucketName are undefined', () => {
+    test("throws for an incorrect scheme prefix", () => {
+      assertThrowsWithMessage(
+        () => validateStorageUriFormat("s3://my-bucket/path"),
+        STORAGE_ERROR_MSG,
+      );
+    });
+
+    test("throws for a URI with no bucket name", () => {
+      assertThrowsWithMessage(
+        () => validateStorageUriFormat("gs:///path/to/data"),
+        STORAGE_ERROR_MSG,
+      );
+    });
+
+    test("throws for a URI with no path after the bucket", () => {
+      assertThrowsWithMessage(() => validateStorageUriFormat("gs://my-bucket/"), STORAGE_ERROR_MSG);
+    });
+
+    test("throws for an empty storage URI string", () => {
+      assertThrowsWithMessage(() => validateStorageUriFormat(""), STORAGE_ERROR_MSG);
+    });
+  });
+
+  suite("getEffectiveBucketName", () => {
+    test("returns configBucketName if provided", () => {
+      expect(getEffectiveBucketName("ws-default", "config-bucket")).to.equal("config-bucket");
+    });
+
+    test("returns defaultBucketName when configBucketName is undefined", () => {
+      expect(getEffectiveBucketName("ws-default", undefined)).to.equal("ws-default");
+    });
+
+    test("returns defaultBucketName when configBucketName is an empty string", () => {
+      expect(getEffectiveBucketName("ws-default", "")).to.equal("ws-default");
+    });
+
+    test("throws error if both configBucketName and defaultBucketName are undefined", () => {
       assertThrowsWithMessage(
         () => getEffectiveBucketName(undefined, undefined),
-        'When defining an Iceberg table, bucket name must be defined in workflow_settings.yaml or the config block.'
+        "When defining an Iceberg table, bucket name must be defined in workflow_settings.yaml or the config block.",
       );
     });
 
-    test('throws error if both configBucketName and defaultBucketName are empty strings', () => {
+    test("throws error if both configBucketName and defaultBucketName are empty strings", () => {
       assertThrowsWithMessage(
-        () => getEffectiveBucketName('', ''),
-        'When defining an Iceberg table, bucket name must be defined in workflow_settings.yaml or the config block.'
+        () => getEffectiveBucketName("", ""),
+        "When defining an Iceberg table, bucket name must be defined in workflow_settings.yaml or the config block.",
       );
     });
   });
 
-  suite('getEffectiveTableFolderRoot', () => {
-    test('returns configTableFolderRoot if provided', () => {
-      expect(getEffectiveTableFolderRoot('ws-root', 'config-root')).to.equal('config-root');
+  suite("getEffectiveTableFolderRoot", () => {
+    test("returns configTableFolderRoot if provided", () => {
+      expect(getEffectiveTableFolderRoot("ws-root", "config-root")).to.equal("config-root");
     });
 
-    test('returns defaultTableFolderRoot when configTableFolderRoot is undefined', () => {
-      expect(getEffectiveTableFolderRoot('ws-root', undefined)).to.equal('ws-root');
+    test("returns defaultTableFolderRoot when configTableFolderRoot is undefined", () => {
+      expect(getEffectiveTableFolderRoot("ws-root", undefined)).to.equal("ws-root");
     });
 
-    test('returns defaultTableFolderRoot when configTableFolderRoot is an empty string', () => {
-      expect(getEffectiveTableFolderRoot('ws-root', '')).to.equal('ws-root');
+    test("returns defaultTableFolderRoot when configTableFolderRoot is an empty string", () => {
+      expect(getEffectiveTableFolderRoot("ws-root", "")).to.equal("ws-root");
     });
 
     test('returns "_dataform" when both config and default are undefined', () => {
-      expect(getEffectiveTableFolderRoot(undefined, undefined)).to.equal('_dataform');
+      expect(getEffectiveTableFolderRoot(undefined, undefined)).to.equal("_dataform");
     });
 
-     test('returns "_dataform" when both config and default are empty strings', () => {
-      expect(getEffectiveTableFolderRoot('', '')).to.equal('_dataform');
-    });
-  });
-
-  suite('getEffectiveTableFolderSubpath', () => {
-    const testDataset = 'my_dataset';
-    const testTable = 'my_table';
-
-    test('returns configTableFolderSubpath when provided', () => {
-      expect(getEffectiveTableFolderSubpath(testDataset, testTable, 'ws/sub', 'config/sub')).to.equal('config/sub');
-    });
-
-    test('returns defaultTableFolderSubpath when configTableFolderSubpath is undefined', () => {
-      expect(getEffectiveTableFolderSubpath(testDataset, testTable, 'ws/sub', undefined)).to.equal('ws/sub');
-    });
-
-    test('returns defaultTableFolderSubpath when configTableFolderSubpath is an empty string', () => {
-      expect(getEffectiveTableFolderSubpath(testDataset, testTable, 'ws/sub', '')).to.equal('ws/sub');
-    });
-
-    test('constructs from dataset/table when both config and default are undefined', () => {
-      expect(getEffectiveTableFolderSubpath(testDataset, testTable, undefined, undefined)).to.equal('my_dataset/my_table');
-    });
-
-    test('constructs from dataset/table when both config and default are empty strings', () => {
-      expect(getEffectiveTableFolderSubpath(testDataset, testTable, '', '')).to.equal('my_dataset/my_table');
+    test('returns "_dataform" when both config and default are empty strings', () => {
+      expect(getEffectiveTableFolderRoot("", "")).to.equal("_dataform");
     });
   });
 
-  suite('getConnectionForIcebergTable', () => {
-    test('returns the config connection string if it exists', () => {
-      expect(getConnectionForIcebergTable('config-connection', 'default-connection')).to.equal('config-connection');
+  suite("getEffectiveTableFolderSubpath", () => {
+    const testDataset = "my_dataset";
+    const testTable = "my_table";
+
+    test("returns configTableFolderSubpath when provided", () => {
+      expect(
+        getEffectiveTableFolderSubpath(testDataset, testTable, "ws/sub", "config/sub"),
+      ).to.equal("config/sub");
     });
 
-    test('returns the default connection string if the config connection is undefined', () => {
-      expect(getConnectionForIcebergTable(undefined, 'default-connection')).to.equal('default-connection');
+    test("returns defaultTableFolderSubpath when configTableFolderSubpath is undefined", () => {
+      expect(getEffectiveTableFolderSubpath(testDataset, testTable, "ws/sub", undefined)).to.equal(
+        "ws/sub",
+      );
     });
 
-    test('returns the default connection string if the config connection is an empty string', () => {
-      expect(getConnectionForIcebergTable('', 'default-connection')).to.equal('default-connection');
+    test("returns defaultTableFolderSubpath when configTableFolderSubpath is an empty string", () => {
+      expect(getEffectiveTableFolderSubpath(testDataset, testTable, "ws/sub", "")).to.equal(
+        "ws/sub",
+      );
+    });
+
+    test("constructs from dataset/table when both config and default are undefined", () => {
+      expect(getEffectiveTableFolderSubpath(testDataset, testTable, undefined, undefined)).to.equal(
+        "my_dataset/my_table",
+      );
+    });
+
+    test("constructs from dataset/table when both config and default are empty strings", () => {
+      expect(getEffectiveTableFolderSubpath(testDataset, testTable, "", "")).to.equal(
+        "my_dataset/my_table",
+      );
+    });
+  });
+
+  suite("getConnectionForIcebergTable", () => {
+    test("returns the config connection string if it exists", () => {
+      expect(getConnectionForIcebergTable("config-connection", "default-connection")).to.equal(
+        "config-connection",
+      );
+    });
+
+    test("returns the default connection string if the config connection is undefined", () => {
+      expect(getConnectionForIcebergTable(undefined, "default-connection")).to.equal(
+        "default-connection",
+      );
+    });
+
+    test("returns the default connection string if the config connection is an empty string", () => {
+      expect(getConnectionForIcebergTable("", "default-connection")).to.equal("default-connection");
     });
 
     test('returns "DEFAULT" when the connections are undefined', () => {
-      expect(getConnectionForIcebergTable(undefined, undefined)).to.equal('DEFAULT');
+      expect(getConnectionForIcebergTable(undefined, undefined)).to.equal("DEFAULT");
     });
 
     test('returns "DEFAULT" when the connections are empty strings', () => {
-      expect(getConnectionForIcebergTable('', '')).to.equal('DEFAULT');
+      expect(getConnectionForIcebergTable("", "")).to.equal("DEFAULT");
     });
   });
 
-  suite('getFileFormatValueForIcebergTable', () => {
-    test('returns PARQUET when configFileFormat is undefined', () => {
+  suite("getFileFormatValueForIcebergTable", () => {
+    test("returns PARQUET when configFileFormat is undefined", () => {
       expect(getFileFormatValueForIcebergTable(undefined)).to.equal(dataform.FileFormat.PARQUET);
     });
 
     test('returns PARQUET when configFileFormat is "PARQUET"', () => {
-      expect(getFileFormatValueForIcebergTable('PARQUET')).to.equal(dataform.FileFormat.PARQUET);
+      expect(getFileFormatValueForIcebergTable("PARQUET")).to.equal(dataform.FileFormat.PARQUET);
     });
 
-    test('returns PARQUET when fileFormat is an empty string', () => {
-      expect(getFileFormatValueForIcebergTable('')).to.equal(dataform.FileFormat.PARQUET);
+    test("returns PARQUET when fileFormat is an empty string", () => {
+      expect(getFileFormatValueForIcebergTable("")).to.equal(dataform.FileFormat.PARQUET);
     });
 
-    test('is case insensitive ', () => {
-      expect(getFileFormatValueForIcebergTable('parquet')).to.equal(dataform.FileFormat.PARQUET);
-      expect(getFileFormatValueForIcebergTable('pArQuEt')).to.equal(dataform.FileFormat.PARQUET);
+    test("is case insensitive ", () => {
+      expect(getFileFormatValueForIcebergTable("parquet")).to.equal(dataform.FileFormat.PARQUET);
+      expect(getFileFormatValueForIcebergTable("pArQuEt")).to.equal(dataform.FileFormat.PARQUET);
     });
 
-    test('throws an error for an unsupported file format string', () => {
+    test("throws an error for an unsupported file format string", () => {
       assertThrowsWithMessage(
-        () => getFileFormatValueForIcebergTable('CSV'),
-        'File format CSV is not supported.'
+        () => getFileFormatValueForIcebergTable("CSV"),
+        "File format CSV is not supported.",
       );
     });
   });
 
-  suite('getStorageUriForIcebergTable', () => {
-    const testBucket = 'my-iceberg-bucket';
-    const testRoot = '_dataform';
-    const testSubpath = 'data/v1';
+  suite("getStorageUriForIcebergTable", () => {
+    const testBucket = "my-iceberg-bucket";
+    const testRoot = "_dataform";
+    const testSubpath = "data/v1";
 
-    test('constructs the URI with a provided tableFolderRoot', () => {
-      expect(getStorageUriForIcebergTable(testBucket, testRoot, testSubpath)).to.equal('gs://my-iceberg-bucket/_dataform/data/v1');
+    test("constructs the URI with a provided tableFolderRoot", () => {
+      expect(getStorageUriForIcebergTable(testBucket, testRoot, testSubpath)).to.equal(
+        "gs://my-iceberg-bucket/_dataform/data/v1",
+      );
     });
 
-    test('handles empty bucket name, resulting in an invalid but formed URI', () => {
-      expect(getStorageUriForIcebergTable('', testRoot, testSubpath)).to.equal('gs:///_dataform/data/v1');
+    test("handles empty bucket name, resulting in an invalid but formed URI", () => {
+      expect(getStorageUriForIcebergTable("", testRoot, testSubpath)).to.equal(
+        "gs:///_dataform/data/v1",
+      );
     });
 
-    test('handles empty tableFolderRoot, resulting in an invalid but formed URI', () => {
-      expect(getStorageUriForIcebergTable(testBucket, '', testSubpath)).to.equal('gs://my-iceberg-bucket//data/v1');
+    test("handles empty tableFolderRoot, resulting in an invalid but formed URI", () => {
+      expect(getStorageUriForIcebergTable(testBucket, "", testSubpath)).to.equal(
+        "gs://my-iceberg-bucket//data/v1",
+      );
     });
 
-    test('handles empty tableFolderSubpath', () => {
-      expect(getStorageUriForIcebergTable(testBucket, testRoot, '')).to.equal('gs://my-iceberg-bucket/_dataform/');
+    test("handles empty tableFolderSubpath", () => {
+      expect(getStorageUriForIcebergTable(testBucket, testRoot, "")).to.equal(
+        "gs://my-iceberg-bucket/_dataform/",
+      );
     });
   });
 
-  suite('validateNoMixedCompilationMode', () => {
+  suite("validateNoMixedCompilationMode", () => {
     const sessionStub = {
       compileError: (_: Error, __: string) => {
         return;
-      }
+      },
     } as any;
 
-    test('does not throw when no AoT properties are present', () => {
-      assertNoThrow(() => validateNoMixedCompilationMode(sessionStub, 'filename', undefined, undefined, [], []));
-    });
-
-    test('throws when query is present', () => {
-      assertThrowsWithMessage(
-        () => validateNoMixedCompilationMode(sessionStub, 'filename', 'query', undefined, [], []),
-        'Cannot mix AoT and JiT compilation in action. The following AoT properties were found: query'
+    test("does not throw when no AoT properties are present", () => {
+      assertNoThrow(() =>
+        validateNoMixedCompilationMode(sessionStub, "filename", undefined, undefined, [], []),
       );
     });
 
-    test('throws correct error message listing all conflicting properties', () => {
+    test("throws when query is present", () => {
       assertThrowsWithMessage(
-        () => validateNoMixedCompilationMode(sessionStub, 'filename', 'query', 'where', ['op'], ['op']),
-        'Cannot mix AoT and JiT compilation in action. The following AoT properties were found: query, where, postOps, preOps'
+        () => validateNoMixedCompilationMode(sessionStub, "filename", "query", undefined, [], []),
+        "Cannot mix AoT and JiT compilation in action. The following AoT properties were found: query",
+      );
+    });
+
+    test("throws correct error message listing all conflicting properties", () => {
+      assertThrowsWithMessage(
+        () =>
+          validateNoMixedCompilationMode(sessionStub, "filename", "query", "where", ["op"], ["op"]),
+        "Cannot mix AoT and JiT compilation in action. The following AoT properties were found: query, where, postOps, preOps",
+      );
+    });
+  });
+
+  suite("getCallerFile", () => {
+    test("returns a relative POSIX path for Windows paths with differing drive-letter case", () => {
+      const globalAny = global as any;
+      const previousCurrentFile = globalAny.__dataform_current_file;
+      try {
+        globalAny.__dataform_current_file = "c:\\project\\definitions\\sub\\table.sqlx";
+        expect(getCallerFile("C:\\project")).to.equal("definitions/sub/table.sqlx");
+      } finally {
+        globalAny.__dataform_current_file = previousCurrentFile;
+      }
+    });
+
+    test("returns a relative POSIX path for Windows UNC paths", () => {
+      const globalAny = global as any;
+      const previousCurrentFile = globalAny.__dataform_current_file;
+      try {
+        globalAny.__dataform_current_file = "\\\\server\\share\\proj\\definitions\\table.sqlx";
+        expect(getCallerFile("\\\\server\\share\\proj")).to.equal("definitions/table.sqlx");
+      } finally {
+        globalAny.__dataform_current_file = previousCurrentFile;
+      }
+    });
+
+    test("accepts any caller file when rootDir is empty", () => {
+      const globalAny = global as any;
+      const previousCurrentFile = globalAny.__dataform_current_file;
+      try {
+        // Hosts that don't set projectDir pass an empty rootDir; the stack must still be searched
+        // instead of failing with "Unable to find valid caller file".
+        globalAny.__dataform_current_file = undefined;
+        expect(() => getCallerFile("")).to.not.throw();
+      } finally {
+        globalAny.__dataform_current_file = previousCurrentFile;
+      }
+    });
+  });
+
+  suite("validateJobLabels", () => {
+    test("returns an empty object for undefined, null or empty labels", () => {
+      expect(validateJobLabels(undefined)).to.deep.equal({});
+      expect(validateJobLabels(null)).to.deep.equal({});
+      expect(validateJobLabels({})).to.deep.equal({});
+    });
+
+    test("returns valid label keys and values unchanged", () => {
+      const labels = {
+        a: "",
+        env: "prod",
+        team_name: "data_eng-1",
+        "cost-center-123": "456_abc-def",
+        dataform: "allowed_without_underscore_or_hyphen_suffix",
+        gcp: "allowed",
+        goog: "allowed",
+        origin_custom: "allowed",
+        ["a".repeat(63)]: "v".repeat(63),
+      };
+      expect(validateJobLabels(labels)).to.deep.equal(labels);
+    });
+
+    test("does not throw for exactly 32 labels", () => {
+      const labels: { [key: string]: string } = {};
+      for (let i = 0; i < 32; i++) {
+        labels[`key_${i}`] = `val_${i}`;
+      }
+      assertNoThrow(() => validateJobLabels(labels));
+    });
+
+    test("throws when more than 32 labels are provided", () => {
+      const labels: { [key: string]: string } = {};
+      for (let i = 0; i < 33; i++) {
+        labels[`key_${i}`] = `val_${i}`;
+      }
+      assertThrowsWithMessage(
+        () => validateJobLabels(labels, "jobLabels"),
+        "Too many job labels in jobLabels: maximum allowed is 32, but got 33.",
+      );
+    });
+
+    [["a", "b"], false, "", 0].forEach((invalidLabels) => {
+      test(`throws when labels is ${JSON.stringify(invalidLabels)} instead of a plain object`, () => {
+        assertThrowsWithMessage(
+          () => validateJobLabels(invalidLabels, "defaultJobLabels"),
+          "defaultJobLabels must be an object mapping string keys to string values.",
+        );
+      });
+    });
+
+    test("converts number and boolean label values to strings without changing its input", () => {
+      const labels = { year: 2026, active: true };
+      expect(validateJobLabels(labels, "defaultJobLabels")).to.deep.equal({
+        year: "2026",
+        active: "true",
+      });
+      expect(labels).to.deep.equal({ year: 2026, active: true });
+    });
+
+    test("throws for label values that aren't strings, numbers or booleans", () => {
+      assertThrowsWithMessage(
+        () => validateJobLabels({ env: { nested: "obj" } }, "defaultJobLabels"),
+        'Invalid job label value for key "env" in defaultJobLabels: label values must be strings, numbers, or booleans.',
+      );
+    });
+
+    test("throws when label key is empty or exceeds 63 characters", () => {
+      assertThrowsWithMessage(
+        () => validateJobLabels({ "": "val" }, "jobLabels"),
+        'Invalid job label key "" in jobLabels: key length must be between 1 and 63 characters.',
+      );
+      const longKey = "a".repeat(64);
+      assertThrowsWithMessage(
+        () => validateJobLabels({ [longKey]: "val" }, "jobLabels"),
+        `Invalid job label key "${longKey}" in jobLabels: key length must be between 1 and 63 characters.`,
+      );
+    });
+
+    ["1key", "-key", "_key", "Key", "my.key", "my/key", "my key"].forEach((invalidKey) => {
+      test(`throws for label key "${invalidKey}", which has invalid characters or doesn't start with a lowercase letter`, () => {
+        assertThrowsWithMessage(
+          () => validateJobLabels({ [invalidKey]: "val" }, "jobLabels"),
+          `Invalid job label key "${invalidKey}" in jobLabels: keys must start with a lowercase ASCII letter and contain only lowercase ASCII letters, numbers, underscores, and hyphens.`,
+        );
+      });
+    });
+
+    ["dataform_", "dataform-", "dataprep-", "gcp-", "goog-"].forEach((prefix) => {
+      test(`throws when label key starts with reserved prefix "${prefix}"`, () => {
+        const key = `${prefix}test`;
+        assertThrowsWithMessage(
+          () => validateJobLabels({ [key]: "val" }, "jobLabels"),
+          `Invalid job label key "${key}" in jobLabels: key cannot start with reserved prefix "${prefix}".`,
+        );
+      });
+    });
+
+    [
+      "bigquery-workflow",
+      "single-file-asset-type",
+      "origin",
+      "bq-dea",
+      "data-preparation-file-loader",
+    ].forEach((key) => {
+      test(`throws when label key is the reserved key "${key}"`, () => {
+        assertThrowsWithMessage(
+          () => validateJobLabels({ [key]: "val" }, "jobLabels"),
+          `Invalid job label key "${key}" in jobLabels: "${key}" is a reserved label key.`,
+        );
+      });
+    });
+
+    test("throws when label value exceeds 63 characters", () => {
+      const longVal = "v".repeat(64);
+      assertThrowsWithMessage(
+        () => validateJobLabels({ env: longVal }, "jobLabels"),
+        `Invalid job label value "${longVal}" for key "env" in jobLabels: value length must be at most 63 characters.`,
+      );
+    });
+
+    ["Prod", "val.1", "val/1", "val 1"].forEach((invalidVal) => {
+      test(`throws for label value "${invalidVal}", which has invalid characters`, () => {
+        assertThrowsWithMessage(
+          () => validateJobLabels({ env: invalidVal }, "jobLabels"),
+          `Invalid job label value "${invalidVal}" for key "env" in jobLabels: values may contain only lowercase ASCII letters, numbers, underscores, and hyphens.`,
+        );
+      });
+    });
+  });
+
+  suite("setActionJobLabels", () => {
+    test("leaves actionDescriptor unset when both defaultJobLabels and actionJobLabels are undefined or empty", () => {
+      const errors: Error[] = [];
+      const sessionStub = { compileError: (e: Error) => errors.push(e) } as any;
+      const proto1: { actionDescriptor?: dataform.IActionDescriptor } = {};
+      const proto2: { actionDescriptor?: dataform.IActionDescriptor } = {};
+      setActionJobLabels(proto1, undefined, sessionStub);
+      setActionJobLabels(proto2, {}, sessionStub);
+      expect(proto1.actionDescriptor).to.equal(undefined);
+      expect(proto2.actionDescriptor).to.equal(undefined);
+      expect(errors).to.deep.equal([]);
+    });
+
+    test("merges defaultJobLabels and actionJobLabels with actionJobLabels taking precedence", () => {
+      const errors: Error[] = [];
+      const sessionStub = {
+        projectConfig: { defaultJobLabels: { env: "dev", team: "core" } },
+        compileError: (e: Error) => errors.push(e),
+      } as any;
+      const proto: { actionDescriptor?: dataform.IActionDescriptor } = {};
+      setActionJobLabels(proto, { env: "prod", cost_center: "analytics" }, sessionStub);
+      expect(proto.actionDescriptor?.jobLabels).to.deep.equal({
+        env: "prod",
+        team: "core",
+        cost_center: "analytics",
+      });
+      expect(errors).to.deep.equal([]);
+    });
+
+    test("records compileError against the action's file and target, and leaves jobLabels unset, when merged labels exceed 32", () => {
+      const errors: Array<{ message: string; fileName?: string; target?: dataform.ITarget }> = [];
+      const defaults: { [key: string]: string } = {};
+      for (let i = 0; i < 20; i++) {
+        defaults[`def_${i}`] = "v";
+      }
+      const actionLabels: { [key: string]: string } = {};
+      for (let i = 0; i < 15; i++) {
+        actionLabels[`act_${i}`] = "v";
+      }
+      const sessionStub = {
+        projectConfig: { defaultJobLabels: defaults },
+        compileError: (e: Error, fileName?: string, target?: dataform.ITarget) =>
+          errors.push({ message: e.message, fileName, target }),
+      } as any;
+      const target = { database: "p", schema: "s", name: "t" };
+      const proto: {
+        actionDescriptor?: dataform.IActionDescriptor;
+        fileName?: string;
+        target?: dataform.ITarget;
+      } = { fileName: "file.sqlx", target };
+      setActionJobLabels(proto, actionLabels, sessionStub);
+      expect(proto.actionDescriptor).to.equal(undefined);
+      expect(errors).to.deep.equal([
+        {
+          message: "Too many job labels in jobLabels: maximum allowed is 32, but got 35.",
+          fileName: "file.sqlx",
+          target,
+        },
+      ]);
+    });
+
+    test("sets jobLabels from actionJobLabels when no session is provided", () => {
+      const proto: { actionDescriptor?: dataform.IActionDescriptor } = {};
+      setActionJobLabels(proto, { env: "prod" });
+      expect(proto.actionDescriptor?.jobLabels).to.deep.equal({ env: "prod" });
+    });
+
+    test("rethrows validation errors when no session is provided", () => {
+      const proto: { actionDescriptor?: dataform.IActionDescriptor } = {};
+      assertThrowsWithMessage(
+        () => setActionJobLabels(proto, ["env"]),
+        "jobLabels must be an object mapping string keys to string values.",
+      );
+      assertThrowsWithMessage(
+        () => setActionJobLabels(proto, { Env: "prod" }),
+        'Invalid job label key "Env" in jobLabels: keys must start with a lowercase ASCII letter and contain only lowercase ASCII letters, numbers, underscores, and hyphens.',
+      );
+      expect(proto.actionDescriptor).to.equal(undefined);
+    });
+  });
+
+  suite("snakeToCamelKeys", () => {
+    test("converts snake_case keys to camelCase while preserving specified map fields", () => {
+      const input = {
+        graph_name: "my_graph",
+        depend_on_dependency_assertions: true,
+        job_labels: {
+          cost_center: "finance",
+          team_name: "data_eng",
+        },
+      };
+      expect(snakeToCamelKeys(input, new Set(["jobLabels"]))).to.deep.equal({
+        graphName: "my_graph",
+        dependOnDependencyAssertions: true,
+        jobLabels: {
+          cost_center: "finance",
+          team_name: "data_eng",
+        },
+      });
+    });
+  });
+
+  suite("Lakehouse 4-part ref and target resolution", () => {
+    test("toResolvable maps 4 positional arguments to normalized target", () => {
+      expect(toResolvable("p", ["c", "n", "t"])).to.deep.equal({
+        database: "p",
+        schema: "c.n",
+        name: "t",
+      });
+      expect(toResolvable(["p", "c", "n", "t"])).to.deep.equal({
+        database: "p",
+        schema: "c.n",
+        name: "t",
+      });
+    });
+
+    test("toResolvable does not split a single dotted string", () => {
+      expect(toResolvable("p.c.n.t")).to.equal("p.c.n.t");
+    });
+
+    test("toResolvable throws when given 5 or more segments", () => {
+      expect(() => toResolvable("a", ["b", "c", "d", "e"])).to.throw(
+        "Invalid input. Accepted inputs include",
+      );
+      expect(() => toResolvable(["a", "b", "c", "d", "e"])).to.throw(
+        "Invalid input. Accepted inputs include",
+      );
+    });
+
+    test("resolvableAsTarget maps explicit Lakehouse object properties to compiled target", () => {
+      expect(
+        resolvableAsTarget({
+          project: "p",
+          catalog: "c",
+          namespace: "n",
+          name: "t",
+        }),
+      ).to.deep.equal(
+        dataform.Target.create({
+          database: "p",
+          schema: "c.n",
+          name: "t",
+        }),
+      );
+      expect(
+        resolvableAsTarget({
+          database: "p",
+          lakehouse: { catalog: "c", namespace: "n" },
+          name: "t",
+        }),
+      ).to.deep.equal(
+        dataform.Target.create({
+          database: "p",
+          schema: "c.n",
+          name: "t",
+        }),
+      );
+    });
+
+    test("resolvableAsTarget applies defaultLakehouseConfig for partial Lakehouse references", () => {
+      expect(
+        resolvableAsTarget(
+          { catalog: "c", name: "t" },
+          { catalog: "default_c", namespace: "default_n" },
+        ),
+      ).to.deep.equal(
+        dataform.Target.create({
+          schema: "c.default_n",
+          name: "t",
+        }),
+      );
+      expect(
+        resolvableAsTarget(
+          { namespace: "n", name: "t" },
+          { catalog: "default_c", namespace: "default_n" },
+        ),
+      ).to.deep.equal(
+        dataform.Target.create({
+          schema: "default_c.n",
+          name: "t",
+        }),
+      );
+    });
+
+    test("resolvableAsTarget throws when Lakehouse reference is missing catalog or namespace", () => {
+      expect(() => resolvableAsTarget({ catalog: "c", name: "t" })).to.throw(
+        "Lakehouse target reference must specify both 'catalog' and 'namespace' (or set defaultLakehouseConfig in workflow_settings.yaml).",
+      );
+      expect(() => resolvableAsTarget({ namespace: "n", name: "t" })).to.throw(
+        "Lakehouse target reference must specify both 'catalog' and 'namespace' (or set defaultLakehouseConfig in workflow_settings.yaml).",
+      );
+    });
+
+    test("resolvableAsActionConfigTarget supports Lakehouse objects and rejects 4-part dotted strings", () => {
+      expect(
+        resolvableAsActionConfigTarget({
+          project: "p",
+          catalog: "c",
+          namespace: "n",
+          name: "t",
+        }),
+      ).to.deep.equal({
+        name: "t",
+        project: "p",
+        lakehouse: {
+          catalog: "c",
+          namespace: "n",
+        },
+        includeDependentAssertions: undefined,
+      });
+      expect(() => resolvableAsActionConfigTarget("p.c.n.t")).to.throw(
+        "Invalid input. Accepted inputs include",
+      );
+      expect(() => resolvableAsActionConfigTarget("example.com:proj.d.t")).to.throw(
+        "Invalid input. Accepted inputs include",
       );
     });
   });

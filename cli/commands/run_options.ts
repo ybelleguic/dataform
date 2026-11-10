@@ -12,13 +12,14 @@ import {
   jsonOutputOption,
   requiresSelection,
   splitCommas,
-  timeoutOption
+  timeoutOption,
 } from "df/cli/common_options";
 import { IProjectConfigArgs, ProjectConfigOptions } from "df/cli/project_config_options";
 import { INamedOption } from "df/cli/yargswrapper";
 
 export interface IRunArgs
-  extends IProjectDirArgs,
+  extends
+    IProjectDirArgs,
     IProjectConfigArgs,
     ICredentialsArgs,
     IActionsArgs,
@@ -36,79 +37,83 @@ export interface IRunArgs
   jobPrefix?: string | null;
   tags?: string[];
   jobLabels?: { [key: string]: string };
+  buildOnly: boolean;
 }
 
 export const dryRunOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "dry-run",
   option: {
-    describe:
-      "If set, BigQuery will validate the run SQL without applying changes to the warehouse.",
-    type: "boolean"
-  }
+    describe: "Validates the run SQL with BigQuery without applying any changes to the warehouse.",
+    type: "boolean",
+  },
 };
 
 export const runTestsOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "run-tests",
   option: {
     describe:
-      "If set, the project's unit tests are required to pass before running the project.",
-    type: "boolean"
-  }
+      "Requires the project's unit tests to pass before executing; aborts the run if any test " +
+      "fails.",
+    type: "boolean",
+  },
 };
 
 export const actionRetryLimitOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "action-retry-limit",
   option: {
-    describe: "If set, idempotent actions will be retried up to the limit.",
+    describe: "Retries idempotent actions up to this many times on failure.",
     type: "number",
-    default: 0
-  }
+    default: 0,
+  },
 };
 
 export const fullRefreshOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "full-refresh",
   option: {
-    describe: "Forces incremental tables to be rebuilt from scratch.",
+    describe: "Forces incremental tables (unless marked protected) to be rebuilt from scratch.",
     type: "boolean",
-    default: false
-  }
+    default: false,
+  },
 };
 
 export const tagsOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "tags",
   option: {
-    describe: "A list of tags to filter the actions to run.",
+    describe: "Tags to filter the actions to run (comma-separated or repeatable).",
     type: "array",
-    coerce: splitCommas
-  }
+    coerce: splitCommas,
+  },
 };
 
 export const includeDepsOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "include-deps",
   option: {
-    describe: "If set, dependencies for selected actions will also be run.",
-    type: "boolean"
+    describe:
+      "Also runs upstream dependencies of the selected actions. Requires --actions or --tags.",
+    type: "boolean",
   },
-  check: requiresSelection("include-deps", actionsOption, tagsOption)
+  check: requiresSelection("include-deps", actionsOption, tagsOption),
 };
 
 export const includeDependentsOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "include-dependents",
   option: {
-    describe: "If set, dependents (downstream) for selected actions will also be run.",
-    type: "boolean"
+    describe:
+      "Also runs downstream dependents of the selected actions. Requires --actions or --tags.",
+    type: "boolean",
   },
-  check: requiresSelection("include-dependents", actionsOption, tagsOption)
+  check: requiresSelection("include-dependents", actionsOption, tagsOption),
 };
 
 export const emitLineageOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "emit-lineage",
   option: {
     describe:
-      "If set, emit OpenLineage RunEvents to Knowledge Catalog Lineage for each executed action. " +
-      "Overrides workflow_settings.yaml lineage.enabled when specified.",
-    type: "boolean"
-  }
+      "If set, emits OpenLineage RunEvents to Knowledge Catalog Lineage for each executed " +
+      "action. Overrides workflow_settings.yaml lineage.enabled when specified. See " +
+      "https://github.com/dataform-co/dataform/blob/main/docs/lineage.md.",
+    type: "boolean",
+  },
 };
 
 export const executionTimeoutOption: INamedOption<yargs.Options, IRunArgs> = {
@@ -120,42 +125,44 @@ export const executionTimeoutOption: INamedOption<yargs.Options, IRunArgs> = {
       "Examples: '10m', '2h'.",
     type: "string",
     default: null,
-    coerce: coerceTimeout
-  }
+    coerce: coerceTimeout,
+  },
 };
 
 export const jitTimeoutOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "jit-timeout",
   option: {
     describe:
-      "Per-model JiT compilation worker timeout. Each action with jitCode gets " +
-      "its own fresh deadline; independent of --execution-timeout. When unset, no " +
+      "Per-model JiT compilation worker timeout. Each JiT action gets its own fresh " +
+      "deadline, independent of --execution-timeout. When unset, no " +
       "per-model cap is applied and only --execution-timeout bounds JiT work. " +
       "Examples: '30s', '2m'.",
     type: "string",
     default: null,
-    coerce: coerceTimeout
-  }
+    coerce: coerceTimeout,
+  },
 };
 
 export const jobPrefixOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "job-prefix",
   option: {
-    describe: "Adds an additional prefix in the form of `dataform-${jobPrefix}-`.",
+    describe: "Adds an additional prefix to BigQuery job IDs, in the form dataform-<job-prefix>-.",
     type: "string",
-    default: null
-  }
+    default: null,
+  },
 };
 
 export const bigqueryJobLabelsOption: INamedOption<yargs.Options, IRunArgs> = {
   name: "job-labels",
   option: {
     describe:
-      "Comma-separated list of labels to add to BigQuery jobs, e.g. 'key1=val1,key2=val2'.",
+      "Comma-separated list of labels to add to BigQuery jobs, e.g. 'key1=val1,key2=val2'. " +
+      "Also applied to unit tests with --run-tests. " +
+      "Overrides job labels and table labels that use the same key.",
     type: "string",
     coerce: (raw: string | null) => {
       const labels: { [key: string]: string } = {};
-      raw?.split(",").forEach(kv => {
+      raw?.split(",").forEach((kv) => {
         if (!kv) {
           return;
         }
@@ -163,8 +170,19 @@ export const bigqueryJobLabelsOption: INamedOption<yargs.Options, IRunArgs> = {
         labels[key] = rest.join("=") || "";
       });
       return labels;
-    }
-  }
+    },
+  },
+};
+
+export const buildOnlyOption: INamedOption<yargs.Options, IRunArgs> = {
+  name: "build-only",
+  option: {
+    describe:
+      "Only builds the execution graph without submitting any queries to BigQuery. JiT actions are not compiled. " +
+      "Note that --dry-run and --run-tests will be ignored if combined with --build-only.",
+    type: "boolean",
+    default: false,
+  },
 };
 
 export const runOptions: Array<INamedOption<yargs.Options, IRunArgs>> = [
@@ -172,17 +190,18 @@ export const runOptions: Array<INamedOption<yargs.Options, IRunArgs>> = [
   runTestsOption,
   actionRetryLimitOption,
   actionsOption,
-  credentialsOption,
-  emitLineageOption,
-  fullRefreshOption,
+  tagsOption,
   includeDepsOption,
   includeDependentsOption,
+  fullRefreshOption,
+  credentialsOption,
   jsonOutputOption,
   timeoutOption,
   executionTimeoutOption,
   jitTimeoutOption,
   jobPrefixOption,
-  tagsOption,
   bigqueryJobLabelsOption,
-  ...ProjectConfigOptions.allYargsOptions
+  emitLineageOption,
+  buildOnlyOption,
+  ...ProjectConfigOptions.allYargsOptions,
 ];

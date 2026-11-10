@@ -1,15 +1,29 @@
 import { expect } from "chai";
 import { EventEmitter } from "events";
+import * as path from "path";
 import { anything, capture, instance, mock, verify, when } from "ts-mockito";
 
+import { Builder } from "df/cli/api/commands/build";
+import { JitCompiler } from "df/cli/api/commands/jit/compiler";
 import { handleDbRequest as handleRpc } from "df/cli/api/commands/jit/rpc";
 import { Runner } from "df/cli/api/commands/run";
 import { IDbAdapter, IDbClient } from "df/cli/api/dbadapters";
+import { unknownToValue } from "df/common/protos";
+import { compile as compileFile } from "df/core/compilers";
 import { jitCompile } from "df/core/jit_compiler";
+import { Session } from "df/core/session";
 import { dataform } from "df/protos/ts";
-import { suite, test } from "df/testing";
+import { suite, test, writeCorePackage } from "df/testing";
+import { TmpDirFixture } from "df/testing/fixtures";
 
-suite("run", () => {
+// Runs JiT compilation in the test process and forwards its RPCs to the mock adapter.
+const inProcessJitCompiler: JitCompiler = async ({ request, dbadapter }) =>
+  jitCompile(request, (method, internalReq, callback) =>
+    (dbadapter as any).rpcImpl(method, internalReq, callback),
+  );
+
+suite("run", ({ afterEach }) => {
+  const tmpDirFixture = new TmpDirFixture(afterEach);
   test("JiT compilation is performed for Table actions", async () => {
     const { mockAdapter, adapterInstance } = createMocks();
 
@@ -19,23 +33,20 @@ suite("run", () => {
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT 1'; }",
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          // RPC callback bridge for tests
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
     // Verify overall run status
     if (result.status !== dataform.RunResult.ExecutionStatus.SUCCESSFUL) {
-      process.stderr.write("Run failed with actions: " + JSON.stringify(result.actions, null, 2) + "\n");
+      process.stderr.write(
+        "Run failed with actions: " + JSON.stringify(result.actions, null, 2) + "\n",
+      );
     }
     expect(result.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
 
@@ -60,17 +71,12 @@ suite("run", () => {
         target: { database: "db", schema: "sch", name: "jit_op" },
         type: "operation",
         jitCode: "async (jctx) => { return ['SELECT 1', 'SELECT 2']; }",
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          // RPC callback bridge for tests
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
@@ -78,12 +84,10 @@ suite("run", () => {
 
     const actionResult = result.actions[0];
     expect(actionResult.status).equals(dataform.ActionResult.ExecutionStatus.SUCCESSFUL);
-    expect(actionResult.tasks.length).equals(2);
+    expect(actionResult.tasks.length).equals(1);
     expect(actionResult.tasks[0].status).equals(dataform.TaskResult.ExecutionStatus.SUCCESSFUL);
-    expect(actionResult.tasks[1].status).equals(dataform.TaskResult.ExecutionStatus.SUCCESSFUL);
 
-    verify(mockAdapter.execute("SELECT 1", anything())).once();
-    verify(mockAdapter.execute("SELECT 2", anything())).once();
+    verify(mockAdapter.execute("SELECT 1;\nSELECT 2", anything())).once();
   });
 
   test("JiT compilation is performed for Assertion actions", async () => {
@@ -94,21 +98,19 @@ suite("run", () => {
         target: { database: "db", schema: "sch", name: "jit_assertion" },
         type: "assertion",
         jitCode: "async (jctx) => { return 'SELECT * FROM t WHERE bad'; }",
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
     if (result.status !== dataform.RunResult.ExecutionStatus.SUCCESSFUL) {
-      process.stderr.write("Run failed with actions: " + JSON.stringify(result.actions, null, 2) + "\n");
+      process.stderr.write(
+        "Run failed with actions: " + JSON.stringify(result.actions, null, 2) + "\n",
+      );
     }
     expect(result.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
 
@@ -132,7 +134,7 @@ suite("run", () => {
         target: { database: "db", schema: "sch", name: "aot_table" },
         type: "table",
         tableType: "table",
-        tasks: [dataform.ExecutionTask.create({ statement: "SELECT 'aot'", type: "statement" })]
+        tasks: [dataform.ExecutionTask.create({ statement: "SELECT 'aot'", type: "statement" })],
       },
       {
         target: { database: "db", schema: "sch", name: "jit_table" },
@@ -140,25 +142,24 @@ suite("run", () => {
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT \"jit\"'; }",
         tasks: [],
-        dependencyTargets: [{ database: "db", schema: "sch", name: "aot_table" }]
-      }
+        dependencyTargets: [{ database: "db", schema: "sch", name: "aot_table" }],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          // RPC callback bridge for tests
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
     expect(result.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
     expect(result.actions.length).equals(2);
 
-    const aotResult = result.actions.find((a: dataform.IActionResult) => a.target.name === "aot_table");
-    const jitResult = result.actions.find((a: dataform.IActionResult) => a.target.name === "jit_table");
+    const aotResult = result.actions.find(
+      (a: dataform.IActionResult) => a.target.name === "aot_table",
+    );
+    const jitResult = result.actions.find(
+      (a: dataform.IActionResult) => a.target.name === "jit_table",
+    );
 
     expect(aotResult.status).equals(dataform.ActionResult.ExecutionStatus.SUCCESSFUL);
     expect(aotResult.tasks.length).equals(1);
@@ -174,7 +175,7 @@ suite("run", () => {
     const [secondStatement] = capture(mockAdapter.execute).second();
     const allStatements = [firstStatement, secondStatement];
     expect(allStatements.some((s: string) => s.includes("SELECT 'aot'"))).to.equal(true);
-    expect(allStatements.some((s: string) => s.includes("SELECT \"jit\""))).to.equal(true);
+    expect(allStatements.some((s: string) => s.includes('SELECT "jit"'))).to.equal(true);
   });
 
   test("Handles JiT compilation syntax error", async () => {
@@ -186,17 +187,12 @@ suite("run", () => {
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { return syntax error; }",
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          // RPC callback bridge for tests
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
@@ -218,18 +214,14 @@ suite("run", () => {
         type: "table",
         tableType: "table",
         // This code calls jctx.adapter.execute() which triggers our mockClient.execute
-        jitCode: "async (jctx) => { await jctx.adapter.execute({statement: 'SELECT fail'}); return 'SELECT 2'; }",
-        tasks: []
-      }
+        jitCode:
+          "async (jctx) => { await jctx.adapter.execute({statement: 'SELECT fail'}); return 'SELECT 2'; }",
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          // RPC callback bridge for tests
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
 
     const result = await runner.execute().result();
@@ -253,8 +245,8 @@ suite("run", () => {
         jitCode: `async (jctx) => {
           return jctx.incremental() ? "SELECT 'inc' as t" : "SELECT 'full' as t";
         }`,
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     let runner: Runner;
@@ -262,11 +254,7 @@ suite("run", () => {
     // 1. First run - empty warehouse, should use 'full' path
     const { mockAdapter: mockAdapterFull, adapterInstance: adapterInstanceFull } = createMocks();
     runner = new Runner(adapterInstanceFull, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const fullResult = await runner.execute().result();
     expect(fullResult.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
@@ -280,20 +268,14 @@ suite("run", () => {
     executionGraph.warehouseState.tables.push({
       target,
       type: dataform.TableMetadata.Type.TABLE,
-      fields: [{ name: "t" }]
+      fields: [{ name: "t" }],
     });
 
     // 3. Second run - table exists, should use 'incremental' path
-    const {
-      mockAdapter: mockAdapterIncremental,
-      adapterInstance: adapterInstanceIncremental
-    } = createMocks();
+    const { mockAdapter: mockAdapterIncremental, adapterInstance: adapterInstanceIncremental } =
+      createMocks();
     runner = new Runner(adapterInstanceIncremental, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const incrementalResult = await runner.execute().result();
     expect(incrementalResult.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
@@ -315,22 +297,18 @@ suite("run", () => {
         jitCode: `async (jctx) => {
           return jctx.incremental() ? "SELECT 'inc' as t" : "SELECT 'full' as t";
         }`,
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
     // Mock that the table already exists in the warehouse as a TABLE with a 't' field
     executionGraph.warehouseState.tables.push({
       target,
       type: dataform.TableMetadata.Type.TABLE,
-      fields: [{ name: "t" }]
+      fields: [{ name: "t" }],
     });
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
@@ -343,9 +321,9 @@ suite("run", () => {
     // We check for substrings without trailing spaces to avoid exact whitespace mismatches.
     expect(executedSql).to.equal(
       "insert into `db.sch.incremental_jit`	\n" +
-      "(`t`)	\n" +
-      "select `t`	\n" +
-      "from (SELECT 'inc' as t) as insertions"
+        "(`t`)	\n" +
+        "select `t`	\n" +
+        "from (SELECT 'inc' as t) as insertions",
     );
   });
 
@@ -356,7 +334,7 @@ suite("run", () => {
     when(mockAdapter.tables(anything(), anything())).thenResolve([{ target }]);
     when(mockAdapter.table(anything())).thenResolve({
       target,
-      type: dataform.TableMetadata.Type.TABLE
+      type: dataform.TableMetadata.Type.TABLE,
     } as any);
 
     const executionGraph = createGraph([
@@ -370,16 +348,12 @@ suite("run", () => {
           await jctx.adapter.deleteTable({ target: table.target });
           return "SELECT '" + table.target.name + "' as deleted_table";
         }`,
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter) => {
-        return await jitCompile(req, (method, internalReq, callback) => {
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+      jitCompiler: inProcessJitCompiler,
     });
     const result = await runner.execute().result();
 
@@ -405,20 +379,20 @@ suite("run", () => {
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { /* hangs forever in mock */ }",
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
     executionGraph.runConfig.timeoutMillis = 200;
 
     let cancelCallbackInvoked = false;
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: (req, pdir, adapter, client, timeoutMs, opts, onCancel) =>
+      jitCompiler: ({ onCancel }) =>
         new Promise((resolve, reject) => {
           onCancel(() => {
             cancelCallbackInvoked = true;
             reject(new Error("Run cancelled while worker was in flight."));
           });
-        })
+        }),
     });
 
     const result = await runner.execute().result();
@@ -431,7 +405,7 @@ suite("run", () => {
     expect(actionResult.tasks.length).equals(1);
     expect(actionResult.tasks[0].status).equals(dataform.TaskResult.ExecutionStatus.FAILED);
     expect(actionResult.tasks[0].errorMessage).to.match(
-      /JiT compilation error.*Run cancelled while worker was in flight/
+      /JiT compilation error.*Run cancelled while worker was in flight/,
     );
   });
 
@@ -444,7 +418,7 @@ suite("run", () => {
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { /* hangs forever in mock */ }",
-        tasks: []
+        tasks: [],
       },
       {
         target: { database: "db", schema: "sch", name: "downstream" },
@@ -452,23 +426,23 @@ suite("run", () => {
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT 1'; }",
         tasks: [],
-        dependencyTargets: [{ database: "db", schema: "sch", name: "hang_jit" }]
-      }
+        dependencyTargets: [{ database: "db", schema: "sch", name: "hang_jit" }],
+      },
     ]);
     executionGraph.runConfig.timeoutMillis = 200;
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: (req, pdir, adapter, client, timeoutMs, opts, onCancel) =>
+      jitCompiler: ({ onCancel }) =>
         new Promise((resolve, reject) => {
           onCancel(() => reject(new Error("Run cancelled while worker was in flight.")));
-        })
+        }),
     });
 
     const result = await runner.execute().result();
 
     expect(result.status).equals(dataform.RunResult.ExecutionStatus.TIMED_OUT);
 
-    const downstream = result.actions.find(a => a.target.name === "downstream");
+    const downstream = result.actions.find((a) => a.target.name === "downstream");
     expect(downstream).to.not.equal(undefined);
     expect(downstream.status).equals(dataform.ActionResult.ExecutionStatus.SKIPPED);
     expect(downstream.tasks.length).to.be.greaterThan(0);
@@ -484,41 +458,39 @@ suite("run", () => {
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT 1'; }",
-        tasks: []
+        tasks: [],
       },
       {
         target: { database: "db", schema: "sch", name: "jit_b" },
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT 2'; }",
-        tasks: []
+        tasks: [],
       },
       {
         target: { database: "db", schema: "sch", name: "jit_c" },
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT 3'; }",
-        tasks: []
+        tasks: [],
       },
       {
         target: { database: "db", schema: "sch", name: "jit_d" },
         type: "table",
         tableType: "table",
         jitCode: "async (jctx) => { return 'SELECT 4'; }",
-        tasks: []
-      }
+        tasks: [],
+      },
     ]);
 
     const runner = new Runner(adapterInstance, executionGraph, {
-      jitCompiler: async (req, pdir, adapter, client, timeoutMs, opts, onCancel) => {
+      jitCompiler: async (options) => {
         // Mirror the real compile worker: register a cancel handler on every
         // invocation so we can observe whether Runner unregisters it once the
         // compile completes.
-        onCancel(() => undefined);
-        return await jitCompile(req, (method, internalReq, callback) => {
-          (adapter as any).rpcImpl(method, internalReq, callback);
-        });
-      }
+        options.onCancel(() => undefined);
+        return await inProcessJitCompiler(options);
+      },
     });
     const result = await runner.execute().result();
 
@@ -530,20 +502,158 @@ suite("run", () => {
     const emitter = (runner as any).eEmitter as EventEmitter;
     expect(emitter.listenerCount("jobCancel")).equals(0);
   });
+  test("Runner passes the compilation environment to the JiT compiler", async () => {
+    const { adapterInstance } = createMocks();
+    const executionGraph = createGraph([
+      {
+        target: { database: "db", schema: "sch", name: "jit_table" },
+        type: "table",
+        tableType: "table",
+        jitCode: "async (jctx) => { return 'SELECT 1'; }",
+        tasks: [],
+      },
+    ]);
+    const calls: Array<{ projectDir: string; expectedCoreVersion?: string }> = [];
+
+    const runner = new Runner(adapterInstance, executionGraph, {
+      projectDir: "/tmp/dataform-isolated-env",
+      expectedCoreVersion: "3.0.71",
+      jitCompiler: async ({ projectDir, expectedCoreVersion }) => {
+        calls.push({ projectDir, expectedCoreVersion });
+        return { table: { query: "SELECT 1" } };
+      },
+    });
+    const result = await runner.execute().result();
+
+    expect(result.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+    expect(calls).deep.equals([
+      { projectDir: "/tmp/dataform-isolated-env", expectedCoreVersion: "3.0.71" },
+    ]);
+  });
+  test("Default JiT worker rejects a core version that differs from compilation", async () => {
+    const { adapterInstance } = createMocks();
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    writeCorePackage(
+      projectDir,
+      `module.exports = { version: "3.0.70", jitCompiler: () => ({ compile: async () => [] }) };`,
+    );
+
+    const executionGraph = createGraph([
+      {
+        target: { database: "db", schema: "sch", name: "jit_table" },
+        type: "table",
+        tableType: "table",
+        jitCode: "async () => 'SELECT 1'",
+        tasks: [],
+      },
+    ]);
+
+    const runner = new Runner(adapterInstance, executionGraph, {
+      projectDir,
+      expectedCoreVersion: "3.0.71",
+    });
+    const result = await runner.execute().result();
+
+    expect(result.status).equals(dataform.RunResult.ExecutionStatus.FAILED);
+    expect(result.actions[0].tasks[0].errorMessage).to.include(
+      `JiT compilation would use @dataform/core 3.0.70 from ` +
+        `'${path.join(projectDir, "node_modules", "@dataform", "core", "bundle.js")}', but the project ` +
+        `was compiled with @dataform/core 3.0.71.`,
+    );
+  });
+
+  test("End-to-end Runner execution of SQLX JiT actions (table, view, incremental, operations, assertion)", async () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const session = new Session(
+      projectDir,
+      dataform.ProjectConfig.create({
+        defaultDatabase: "db",
+        defaultSchema: "sch",
+        warehouse: "bigquery",
+        vars: { prod: "true" },
+      }),
+    );
+    session.jitContextData.fields["env_suffix"] = unknownToValue("prod");
+    const constants = { TAGS: ["jit_tag"] };
+    const sqlxFiles: Array<[string, string]> = [
+      [
+        "definitions/sqlx_table.sqlx",
+        `config {
+  type: dataform.projectConfig.vars.prod ? "table" : "view",
+  compilation_mode: "jit",
+  tags: constants.TAGS,
+  filename: "definitions/sqlx_table.sqlx"
+}
+js {
+  const res = await adapter.execute({ statement: "SELECT 'col_a' AS c" });
+}
+SELECT 1 AS id, '\${data.env_suffix}' AS env`,
+      ],
+      [
+        "definitions/sqlx_view.sqlx",
+        `config { type: "view", compilation_mode: "jit", dependencies: ["sqlx_table"], filename: "definitions/sqlx_view.sqlx" }
+SELECT * FROM \${ref("sqlx_table")}`,
+      ],
+      [
+        "definitions/sqlx_inc.sqlx",
+        `config { type: "incremental", compilation_mode: "jit", filename: "definitions/sqlx_inc.sqlx" }
+SELECT 1 AS id \${when(incremental(), "WHERE id > 0")}`,
+      ],
+      [
+        "definitions/sqlx_ops.sqlx",
+        `config { type: "operations", compilation_mode: "jit", filename: "definitions/sqlx_ops.sqlx" }
+SELECT 10;
+---
+SELECT 20`,
+      ],
+      [
+        "definitions/sqlx_assert.sqlx",
+        `config { type: "assertion", compilation_mode: "jit", dependencies: ["sqlx_table"], filename: "definitions/sqlx_assert.sqlx" }
+SELECT * FROM \${ref("sqlx_table")} WHERE id IS NULL`,
+      ],
+    ];
+    for (const [filePath, content] of sqlxFiles) {
+      // eslint-disable-next-line no-new-func
+      new Function("dataform", "constants", compileFile(content, filePath))(session, constants);
+    }
+
+    const compiledGraph = session.compile();
+    expect(compiledGraph.graphErrors.compilationErrors).deep.equals([]);
+    const compiledSqlxTable = compiledGraph.tables.find((t) => t.target.name === "sqlx_table");
+    expect(compiledSqlxTable.tags).deep.equals(["jit_tag"]);
+
+    const builder = new Builder(compiledGraph, {}, { tables: [] });
+    const executionGraph = builder.build();
+
+    const { mockAdapter, adapterInstance } = createMocks();
+    const runner = new Runner(adapterInstance, executionGraph, {
+      jitCompiler: inProcessJitCompiler,
+    });
+    const result = await runner.execute().result();
+
+    expect(result.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+    expect(result.actions.length).equals(5);
+    for (const actionResult of result.actions) {
+      expect(actionResult.status).equals(dataform.ActionResult.ExecutionStatus.SUCCESSFUL);
+      expect(actionResult.tasks.length).to.be.greaterThan(0);
+    }
+    verify(mockAdapter.execute(anything(), anything())).atLeast(5);
+  });
 });
 
 function createMocks() {
   const mockAdapter = mock<IDbAdapter>();
   const mockClient = mock<IDbClient>();
 
-  when(mockAdapter.schemas(anything())).thenResolve([]);
+  // The target datasets exist, so tasks aren't wrapped in a script creating them.
+  when(mockAdapter.schemas(anything())).thenResolve(["sch"]);
   when(mockAdapter.execute(anything(), anything())).thenCall((statement: string) => {
     if (statement.includes("fail") || statement.includes("nonexistent")) {
       throw new Error("RPC DB Fail");
     }
     return Promise.resolve({
       rows: [],
-      metadata: {}
+      metadata: {},
     });
   });
   when(mockClient.executeRaw(anything(), anything())).thenCall((statement: string) => {
@@ -552,7 +662,7 @@ function createMocks() {
     }
     return Promise.resolve({
       rows: [],
-      metadata: {}
+      metadata: {},
     });
   });
   when(mockClient.execute(anything(), anything())).thenCall((statement: string) => {
@@ -561,7 +671,7 @@ function createMocks() {
     }
     return Promise.resolve({
       rows: [],
-      metadata: {}
+      metadata: {},
     });
   });
 
@@ -580,9 +690,9 @@ function createGraph(actions: any[]): dataform.ExecutionGraph {
     projectConfig: { warehouse: "bigquery" },
     runConfig: { fullRefresh: false, timeoutMillis: 30000 },
     warehouseState: { tables: [] },
-    actions: actions.map(a => ({
+    actions: actions.map((a) => ({
       dependencyTargets: [],
-      ...a
-    }))
+      ...a,
+    })),
   });
 }

@@ -16,13 +16,13 @@ suite("@dataform/api/build", () => {
     const executionGraph = builder.build();
 
     const actionA = executionGraph.actions.find(
-      n => targetAsReadableString(n.target) === "schema.a"
+      (n) => targetAsReadableString(n.target) === "schema.a",
     );
     const actionB = executionGraph.actions.find(
-      n => targetAsReadableString(n.target) === "schema.b"
+      (n) => targetAsReadableString(n.target) === "schema.b",
     );
     const actionC = executionGraph.actions.find(
-      n => targetAsReadableString(n.target) === "schema.c"
+      (n) => targetAsReadableString(n.target) === "schema.c",
     );
 
     assert.exists(actionA);
@@ -39,7 +39,7 @@ suite("@dataform/api/build", () => {
       const graphWithErrors: dataform.ICompiledGraph = dataform.CompiledGraph.create({
         projectConfig: { warehouse: "bigquery" },
         graphErrors: { compilationErrors: [{ message: "Some critical error" }] },
-        tables: [{ target: { schema: "schema", name: "a" } }]
+        tables: [{ target: { schema: "schema", name: "a" } }],
       });
 
       const builder = new Builder(graphWithErrors, {}, TEST_STATE);
@@ -55,17 +55,23 @@ suite("@dataform/api/build", () => {
         {
           target: { schema: "schema", name: "b" },
           type: "incremental",
-          where: "test"
+          where: "test",
         },
-        { target: { schema: "schema", name: "c" }, type: "view" }
+        { target: { schema: "schema", name: "c" }, type: "view" },
       ],
       operations: [
         {
           target: { schema: "schema", name: "d" },
-          queries: ["create or replace view schema.someview as select 1 as test"]
-        }
+          queries: ["create or replace view schema.someview as select 1 as test"],
+        },
       ],
-      assertions: [{ target: { schema: "schema", name: "e" } }]
+      assertions: [{ target: { schema: "schema", name: "e" } }],
+      propertyGraphs: [
+        {
+          target: { database: "db", schema: "schema", name: "f" },
+          graphBody: "NODE TABLES (`db.schema.a` AS A KEY (id))",
+        },
+      ],
     });
 
     const builder = new Builder(graph, {}, TEST_STATE);
@@ -74,25 +80,64 @@ suite("@dataform/api/build", () => {
     expect(executedGraph.actions.length).greaterThan(0);
 
     graph.tables.forEach((t: dataform.ITable) => {
-      const action = executedGraph.actions.find(item =>
-        equals(dataform.Target, item.target, t.target)
+      const action = executedGraph.actions.find((item) =>
+        equals(dataform.Target, item.target, t.target),
       );
       expect(action).to.include({ type: "table", target: t.target, tableType: t.type });
     });
 
     graph.operations.forEach((o: dataform.IOperation) => {
-      const action = executedGraph.actions.find(item =>
-        equals(dataform.Target, item.target, o.target)
+      const action = executedGraph.actions.find((item) =>
+        equals(dataform.Target, item.target, o.target),
       );
       expect(action).to.include({ type: "operation", target: o.target });
     });
 
     graph.assertions.forEach((a: dataform.IAssertion) => {
-      const action = executedGraph.actions.find(item =>
-        equals(dataform.Target, item.target, a.target)
+      const action = executedGraph.actions.find((item) =>
+        equals(dataform.Target, item.target, a.target),
       );
       expect(action).to.include({ type: "assertion" });
     });
+
+    graph.propertyGraphs.forEach((pg: dataform.IPropertyGraph) => {
+      const action = executedGraph.actions.find((item) =>
+        equals(dataform.Target, item.target, pg.target),
+      );
+      expect(action).to.include({ type: "propertyGraph" });
+    });
+  });
+
+  test("propagates actionDescriptor.jobLabels to execution actions", () => {
+    const graph: dataform.ICompiledGraph = dataform.CompiledGraph.create({
+      projectConfig: { warehouse: "bigquery" },
+      tables: [
+        {
+          target: { schema: "schema", name: "a" },
+          type: "table",
+          actionDescriptor: { jobLabels: { env: "prod" } },
+        },
+      ],
+      propertyGraphs: [
+        {
+          target: { database: "db", schema: "schema", name: "f" },
+          graphBody: "NODE TABLES (`db.schema.a` AS A KEY (id))",
+          actionDescriptor: { jobLabels: { team: "graphs" } },
+        },
+      ],
+    });
+
+    const executedGraph = new Builder(graph, {}, TEST_STATE).build();
+
+    expect(
+      executedGraph.actions.map((action) => [
+        action.target.name,
+        action.actionDescriptor?.jobLabels,
+      ]),
+    ).to.deep.equal([
+      ["a", { env: "prod" }],
+      ["f", { team: "graphs" }],
+    ]);
   });
 
   test("table_enum_types", () => {
@@ -103,10 +148,10 @@ suite("@dataform/api/build", () => {
         {
           target: { schema: "schema", name: "b" },
           enumType: dataform.TableType.INCREMENTAL,
-          where: "test"
+          where: "test",
         },
-        { target: { schema: "schema", name: "c" }, enumType: dataform.TableType.VIEW }
-      ]
+        { target: { schema: "schema", name: "c" }, enumType: dataform.TableType.VIEW },
+      ],
     });
 
     const builder = new Builder(graph, {}, TEST_STATE);
@@ -115,13 +160,13 @@ suite("@dataform/api/build", () => {
     expect(executedGraph.actions.length).greaterThan(0);
 
     graph.tables.forEach((t: dataform.ITable) => {
-      const action = executedGraph.actions.find(item =>
-        equals(dataform.Target, item.target, t.target)
+      const action = executedGraph.actions.find((item) =>
+        equals(dataform.Target, item.target, t.target),
       );
       expect(action).to.include({
         type: "table",
         target: t.target,
-        tableType: dataform.TableType[t.enumType].toLowerCase()
+        tableType: dataform.TableType[t.enumType].toLowerCase(),
       });
     });
   });
@@ -133,13 +178,13 @@ suite("@dataform/api/build", () => {
         {
           target: { schema: "schema", name: "a" },
           enumType: dataform.TableType.TABLE,
-          type: "incremental"
-        }
-      ]
+          type: "incremental",
+        },
+      ],
     });
 
     expect(() => new Builder(graph, {}, TEST_STATE)).to.throw(
-      /Table str type "incremental" and enumType "table" are not equivalent/
+      /Table str type "incremental" and enumType "table" are not equivalent/,
     );
   });
 
@@ -155,10 +200,10 @@ suite("@dataform/api/build", () => {
           preOps: ["preOp"],
           incrementalPreOps: ["incremental preOp"],
           postOps: ["postOp"],
-          incrementalPostOps: ["incremental postOp"]
-        }
+          incrementalPostOps: ["incremental postOp"],
+        },
       ],
-      dataformCoreVersion: "1.4.9"
+      dataformCoreVersion: "1.4.9",
     });
 
     test("bigquery when running non incrementally", () => {
@@ -166,8 +211,8 @@ suite("@dataform/api/build", () => {
       expect(action.tasks).eql([
         dataform.ExecutionTask.create({
           type: "statement",
-          statement: "preOp;\ncreate or replace table `schema.a` as foo;\npostOp"
-        })
+          statement: "preOp;\ncreate or replace table `schema.a` as foo;\npostOp",
+        }),
       ]);
     });
 
@@ -176,15 +221,15 @@ suite("@dataform/api/build", () => {
         graph,
         {},
         dataform.WarehouseState.create({
-          tables: [{ target: graph.tables[0].target, fields: [] }]
-        })
+          tables: [{ target: graph.tables[0].target, fields: [] }],
+        }),
       ).build().actions[0];
       expect(action.tasks).eql([
         dataform.ExecutionTask.create({
           type: "statement",
           statement:
-            "incremental preOp;\ndrop view if exists `schema.a`;\ninsert into `schema.a`\t\n()\t\nselect \t\nfrom (incremental foo) as insertions;\nincremental postOp"
-        })
+            "incremental preOp;\ndrop view if exists `schema.a`;\ninsert into `schema.a`\t\n()\t\nselect \t\nfrom (incremental foo) as insertions;\nincremental postOp",
+        }),
       ]);
     });
   });

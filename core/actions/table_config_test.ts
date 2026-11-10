@@ -6,13 +6,13 @@ import {
   suite,
   test,
   writeDefinitionFile,
-  writeWorkflowSettingsFile
+  writeWorkflowSettingsFile,
 } from "df/testing";
 import { TmpDirFixture } from "df/testing/fixtures";
 import {
   coreExecutionRequestFromPath,
   runMainInVm,
-  VALID_WORKFLOW_SETTINGS_YAML
+  VALID_WORKFLOW_SETTINGS_YAML,
 } from "df/testing/run_core";
 
 suite("table sqlx and JS API config options", ({ afterEach }) => {
@@ -43,6 +43,7 @@ suite("table sqlx and JS API config options", ({ afterEach }) => {
     dependOnDependencyAssertions: true,
     hermetic: true,
     reservation: "reservation",
+    jobLabels: {"job_key": "job_val"},
     metadata: {
         overview: "table overview",
         extraProperties: {
@@ -58,13 +59,13 @@ suite("table sqlx and JS API config options", ({ afterEach }) => {
       filename: "table.sqlx",
       fileContents: `
 config ${tableConfig}
-SELECT 1`
+SELECT 1`,
     },
     {
       filename: "table.js",
-      fileContents: `publish("name", ${tableConfig}).query(ctx => \`\n\nSELECT 1\`)`
-    }
-  ].forEach(testParameters => {
+      fileContents: `publish("name", ${tableConfig}).query(ctx => \`\n\nSELECT 1\`)`,
+    },
+  ].forEach((testParameters) => {
     test(`for tables configured in a ${testParameters.filename} file`, () => {
       const projectDir = tmpDirFixture.createNewTmpDir();
       writeWorkflowSettingsFile(projectDir, VALID_WORKFLOW_SETTINGS_YAML);
@@ -79,12 +80,12 @@ SELECT 1`
           target: {
             database: "project",
             schema: "dataset",
-            name: "name"
+            name: "name",
           },
           canonicalTarget: {
             database: "project",
             schema: "dataset",
-            name: "name"
+            name: "name",
           },
           type: "table",
           disabled: true,
@@ -92,23 +93,23 @@ SELECT 1`
           bigquery: {
             additionalOptions: {
               option1Key: "option1",
-              option2Key: "option2"
+              option2Key: "option2",
             },
             clusterBy: ["clusterBy"],
             labels: {
-              key: "val"
+              key: "val",
             },
             partitionBy: "partitionBy",
             partitionExpirationDays: 1,
-            requirePartitionFilter: true
+            requirePartitionFilter: true,
           },
           tags: ["tag1", "tag2"],
           dependencyTargets: [
             {
               database: "defaultProject",
               schema: "defaultDataset",
-              name: "operation"
-            }
+              name: "operation",
+            },
           ],
           enumType: "TABLE",
           fileName: `definitions/${testParameters.filename}`,
@@ -116,23 +117,26 @@ SELECT 1`
           actionDescriptor: {
             ...exampleActionDescriptor.outputActionDescriptor,
             reservation: "reservation",
+            jobLabels: {
+              job_key: "job_val",
+            },
             // sqlxConfig.bigquery.labels are placed as bigqueryLabels.
             bigqueryLabels: {
-              key: "val"
+              key: "val",
             },
             metadata: {
               overview: "table overview",
               extraProperties: {
                 fields: {
-                  priority: { stringValue: "high" }
-                }
-              }
-            }
-          }
-        }
+                  priority: { stringValue: "high" },
+                },
+              },
+            },
+          },
+        },
       ]);
       expect(asPlainObject(result.compile.compiledGraph.assertions)).deep.equals(
-        exampleBuiltInAssertions.outputAssertions(testParameters.filename)
+        exampleBuiltInAssertions.outputAssertions(testParameters.filename),
       );
     });
   });
@@ -151,20 +155,20 @@ SELECT 1`
         }
     }
 }
-SELECT 1`
+SELECT 1`,
     );
 
     const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
     expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
     expect(
-      asPlainObject(result.compile.compiledGraph.tables[0].actionDescriptor.metadata)
+      asPlainObject(result.compile.compiledGraph.tables[0].actionDescriptor.metadata),
     ).deep.equals({
       extraProperties: {
         fields: {
-          priority: { stringValue: "high" }
-        }
-      }
+          priority: { stringValue: "high" },
+        },
+      },
     });
   });
 
@@ -207,14 +211,14 @@ SELECT 1`
         }
     }
 }
-SELECT 1`
+SELECT 1`,
     );
 
     const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
 
     expect(result.compile.compiledGraph.graphErrors.compilationErrors).deep.equals([]);
     expect(
-      asPlainObject(result.compile.compiledGraph.tables[0].actionDescriptor.metadata)
+      asPlainObject(result.compile.compiledGraph.tables[0].actionDescriptor.metadata),
     ).deep.equals({
       extraProperties: {
         fields: {
@@ -227,23 +231,23 @@ SELECT 1`
                     fields: {
                       column_name: { stringValue: "trip_id" },
                       project: { stringValue: "project_identifier" },
-                      location: { stringValue: "us-central1" }
-                    }
-                  }
+                      location: { stringValue: "us-central1" },
+                    },
+                  },
                 },
                 {
                   structValue: {
                     fields: {
                       project: { stringValue: "project_identifier" },
-                      glossary_id: { stringValue: "jebmjilij-9c85ee94" }
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      }
+                      glossary_id: { stringValue: "jebmjilij-9c85ee94" },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
     });
   });
 
@@ -276,7 +280,7 @@ SELECT 1`
         }
       }
     }
-    SELECT 1`
+    SELECT 1`,
     );
 
     const result = runMainInVm(coreExecutionRequestFromPath(projectDir));
@@ -295,30 +299,30 @@ SELECT 1`
                   fields: {
                     column_name: { stringValue: "trip_id" },
                     project: { stringValue: "project_identifier" },
-                    location: { stringValue: "us-central1" }
-                  }
-                }
+                    location: { stringValue: "us-central1" },
+                  },
+                },
               },
               {
                 structValue: {
                   fields: {
                     project: { stringValue: "project_identifier" },
-                    glossary_id: { stringValue: "jebmjilij-9c85ee94" }
-                  }
-                }
-              }
-            ]
-          }
+                    glossary_id: { stringValue: "jebmjilij-9c85ee94" },
+                  },
+                },
+              },
+            ],
+          },
         },
         generic: {
           structValue: {
             fields: {
               system: { stringValue: "my custom system value" },
-              type: { stringValue: "my custom type value" }
-            }
-          }
-        }
-      }
+              type: { stringValue: "my custom type value" },
+            },
+          },
+        },
+      },
     });
   });
 });

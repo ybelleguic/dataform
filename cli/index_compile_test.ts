@@ -1,18 +1,22 @@
 import { expect } from "chai";
+import { spawn } from "child_process";
 import * as fs from "fs-extra";
 import { dump as dumpYaml, load as loadYaml } from "js-yaml";
 import * as path from "path";
 
+import { TEMPORARY_ENVIRONMENT_PREFIX } from "df/cli/api/commands/compile";
 import {
   alterWorkflowSettings,
+  cliEntryPointPath,
   INTEGRATION_TEST_LOCATION,
   INTEGRATION_TEST_PROJECT,
   runCli,
-  setupProject
+  setupProject,
+  writeWorkflowSettingsWithCoreVersion,
 } from "df/cli/index_test_base";
 import { version } from "df/core/version";
 import { dataform } from "df/protos/ts";
-import { suite, test, writeDefinitionFile } from "df/testing";
+import { getProcessResult, nodePath, suite, test, writeDefinitionFile } from "df/testing";
 import { TmpDirFixture } from "df/testing/fixtures";
 
 suite("compile", () => {
@@ -26,14 +30,14 @@ suite("compile", () => {
         const projectDir = tmpDirFixture.createNewTmpDir();
         fs.writeFileSync(
           path.join(projectDir, "workflow_settings.yaml"),
-          dumpYaml(dataform.WorkflowSettings.create({ defaultProject: "dataform" }))
+          dumpYaml(dataform.WorkflowSettings.create({ defaultProject: "dataform" })),
         );
 
         expect((await runCli("compile", [projectDir])).stderr).contains(
           "dataformCoreVersion must be specified either in workflow_settings.yaml or via a " +
-            "package.json"
+            "package.json",
         );
-      }
+      },
     );
 
     test("compile error when package.json and no package is installed", async () => {
@@ -44,7 +48,7 @@ suite("compile", () => {
   "dependencies":{
     "@dataform/core": "${version}"
   }
-}`
+}`,
       );
       fs.writeFileSync(
         path.join(projectDir, "dataform.json"),
@@ -54,75 +58,87 @@ suite("compile", () => {
   "assertionSchema": "df_integration_test_assertions",
   "defaultLocation": "${INTEGRATION_TEST_LOCATION}"
 }
-`
+`,
       );
 
-      expect((await runCli("compile", [projectDir])).stderr).contains(
-        "Could not find a recent installed version of @dataform/core in the project. Check that " +
-          "either `dataformCoreVersion` is specified in `workflow_settings.yaml`, or " +
-          "`@dataform/core` is specified in `package.json`. If using `package.json`, then run " +
-          "`dataform install`."
+      const stderr = (await runCli("compile", [projectDir])).stderr;
+      expect(stderr).contains("Could not find @dataform/core:");
+      expect(stderr).contains(
+        "Run `dataform install` in the project directory to install the version from package.json.",
       );
     });
 
-    test("compile rejects @dataform/core with incompatible version", { timeout: 60000 }, async () => {
-      const projectDir = tmpDirFixture.createNewTmpDir();
-      // dataformCoreVersion in workflow_settings.yaml triggers the stateless
-      // install path (compile.ts copies to a tmp dir and runs `npm i`), so the
-      // test exercises the same flow real users hit. 2.9.0 is the latest 2.x on
-      // the registry; its major (2) is incompatible with the current CLI (3.x).
-      fs.writeFileSync(
-        path.join(projectDir, "workflow_settings.yaml"),
-        dumpYaml(
-          dataform.WorkflowSettings.create({
-            defaultProject: "dataform",
-            dataformCoreVersion: "2.9.0"
+    test(
+      "compile rejects @dataform/core with incompatible version",
+      { timeout: 60000 },
+      async () => {
+        const projectDir = tmpDirFixture.createNewTmpDir();
+        // dataformCoreVersion in workflow_settings.yaml triggers the stateless
+        // install path (compile.ts copies to a tmp dir and runs `npm i`), so the
+        // test exercises the same flow real users hit. 2.9.0 is the latest 2.x on
+        // the registry; its major (2) is incompatible with the current CLI (3.x).
+        fs.writeFileSync(
+          path.join(projectDir, "workflow_settings.yaml"),
+          dumpYaml(
+            dataform.WorkflowSettings.create({
+              defaultProject: "dataform",
+              dataformCoreVersion: "2.9.0",
+            }),
+          ),
+        );
+
+        // npm needs a writable cache; ~/.npm is read-only in the bazel sandbox.
+        const npmCacheDir = tmpDirFixture.createNewTmpDir();
+        const stderr = (
+          await runCli("compile", [projectDir], {
+            env: { ...process.env, NPM_CONFIG_CACHE: npmCacheDir },
           })
-        )
-      );
+        ).stderr;
+        expect(stderr).contains("@dataform/core 2.9.0 is not compatible with @dataform/cli");
+        expect(stderr).contains("The CLI requires @dataform/core >=3.0.0 <4.0.0");
+        expect(stderr).contains("Set `dataformCoreVersion:");
+      },
+    );
 
-      // npm needs a writable cache; ~/.npm is read-only in the bazel sandbox.
-      const npmCacheDir = tmpDirFixture.createNewTmpDir();
-      const stderr = (
-        await runCli("compile", [projectDir], {
-          env: { ...process.env, NPM_CONFIG_CACHE: npmCacheDir }
-        })
-      ).stderr;
-      expect(stderr).contains("@dataform/core 2.9.0 is not compatible with @dataform/cli");
-      expect(stderr).contains("matching major.minor");
-      expect(stderr).contains("Set `dataformCoreVersion:");
+    // Core versions older than 3.0.57 can't tell which project file is running when the CLI
+    // runs them in its VM, so the CLI patches them (the caller-file shim). These tests check
+    // that the shim still gives actions the right fileName. 3.0.0 is MIN_SUPPORTED_CORE_VERSION
+    // (cli/vm/compile.ts), so it must keep working when the CLI version goes up.
+    ["3.0.0", "3.0.50"].forEach((coreVersion) => {
+      test(
+        `compile succeeds with @dataform/core ${coreVersion} via caller-file shim`,
+        { timeout: 60000 },
+        async () => {
+          const projectDir = tmpDirFixture.createNewTmpDir();
+          fs.writeFileSync(
+            path.join(projectDir, "workflow_settings.yaml"),
+            dumpYaml({
+              defaultProject: INTEGRATION_TEST_PROJECT,
+              defaultLocation: INTEGRATION_TEST_LOCATION,
+              defaultDataset: "dataform",
+              dataformCoreVersion: coreVersion,
+            }),
+          );
+          writeDefinitionFile(
+            projectDir,
+            "example.sqlx",
+            `config { type: "table" }\nSELECT 1 AS id`,
+          );
+
+          const npmCacheDir = tmpDirFixture.createNewTmpDir();
+          const result = await runCli("compile", [projectDir, "--json"], {
+            env: { ...process.env, NPM_CONFIG_CACHE: npmCacheDir },
+          });
+
+          expect(result.exitCode, `compile failed: ${result.stderr}`).equals(0);
+          const compiled = JSON.parse(result.stdout);
+          expect(compiled.tables).to.have.lengthOf(1);
+          expect(compiled.tables[0].fileName).equals("definitions/example.sqlx");
+        },
+      );
     });
 
-    test("compile succeeds with @dataform/core <= 3.0.56 via caller-file shim", { timeout: 60000 }, async () => {
-      const projectDir = tmpDirFixture.createNewTmpDir();
-      // 3.0.50 predates 3.0.57, which is when @dataform/core started reading
-      // global.__dataform_current_file as a fallback in getCallerFile(). The
-      // compile path text-patches the bundle to add that fallback; this test
-      // proves the patch + host-side file stack drive a real action's
-      // fileName from inside vm2 3.11.3's path-stripped sandbox.
-      fs.writeFileSync(
-        path.join(projectDir, "workflow_settings.yaml"),
-        dumpYaml({
-          defaultProject: INTEGRATION_TEST_PROJECT,
-          defaultLocation: INTEGRATION_TEST_LOCATION,
-          defaultDataset: "dataform",
-          dataformCoreVersion: "3.0.50"
-        })
-      );
-      writeDefinitionFile(projectDir, "example.sqlx", `config { type: "table" }\nSELECT 1 AS id`);
-
-      const npmCacheDir = tmpDirFixture.createNewTmpDir();
-      const result = await runCli("compile", [projectDir, "--json"], {
-        env: { ...process.env, NPM_CONFIG_CACHE: npmCacheDir }
-      });
-
-      expect(result.exitCode, `compile failed: ${result.stderr}`).equals(0);
-      const compiled = JSON.parse(result.stdout);
-      expect(compiled.tables).to.have.lengthOf(1);
-      expect(compiled.tables[0].fileName).equals("definitions/example.sqlx");
-    });
-
-    ["package.json", "package-lock.json", "node_modules"].forEach(npmFile => {
+    ["package.json", "package-lock.json", "node_modules"].forEach((npmFile) => {
       test(`compile throws an error when dataformCoreVersion in workflow_settings.yaml and ${npmFile} is present`, async () => {
         const projectDir = tmpDirFixture.createNewTmpDir();
         fs.writeFileSync(
@@ -130,9 +146,9 @@ suite("compile", () => {
           dumpYaml(
             dataform.WorkflowSettings.create({
               defaultProject: "dataform",
-              dataformCoreVersion: "3.0.0"
-            })
-          )
+              dataformCoreVersion: "3.0.0",
+            }),
+          ),
         );
         const resolvedNpmPath = path.join(projectDir, npmFile);
         if (npmFile === "node_modules") {
@@ -142,10 +158,269 @@ suite("compile", () => {
         }
 
         expect((await runCli("compile", [projectDir])).stderr).contains(
-          `${npmFile}' unexpected; remove it and try again`
+          `${npmFile}' unexpected; remove it and try again`,
         );
       });
     });
+
+    // Runs the CLI with a fake `npm` that records its pid, marks that it has started and then
+    // hangs; once the installation has started, sends `signal` either to the CLI's whole process
+    // group (like Ctrl+C in a terminal) or to the CLI process only (like `kill <pid>`), and reports
+    // how the CLI exited. The fake `npm` makes the timing deterministic and needs no network.
+    async function interruptDuringCoreInstallation(
+      command: string,
+      signal: "SIGINT" | "SIGTERM",
+      target: "processGroup" | "cliProcess",
+    ) {
+      const projectDir = tmpDirFixture.createNewTmpDir();
+      writeWorkflowSettingsWithCoreVersion(projectDir, version);
+      const tmpDir = tmpDirFixture.createNewTmpDir();
+      const fakeBinDir = tmpDirFixture.createNewTmpDir();
+      const npmPidFile = path.join(tmpDirFixture.createNewTmpDir(), "npm.pid");
+      fs.writeFileSync(
+        path.join(fakeBinDir, "npm"),
+        `#!/bin/sh\necho $$ > "${npmPidFile}"\ntouch npm-started\nexec sleep 600\n`,
+        { mode: 0o755 },
+      );
+
+      // A separate process group, like a job in a terminal.
+      const cli = spawn(nodePath, [cliEntryPointPath, command, projectDir], {
+        detached: true,
+        env: {
+          ...process.env,
+          TMPDIR: tmpDir,
+          PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH}`,
+        },
+      });
+      const result = getProcessResult(cli);
+      const temporaryEnvironments = () =>
+        fs.readdirSync(tmpDir).filter((entry) => entry.startsWith(TEMPORARY_ENVIRONMENT_PREFIX));
+      try {
+        await waitUntil(() =>
+          temporaryEnvironments().some((entry) =>
+            fs.existsSync(path.join(tmpDir, entry, "npm-started")),
+          ),
+        );
+        process.kill(target === "processGroup" ? -cli.pid : cli.pid, signal);
+      } catch (e) {
+        process.kill(-cli.pid, "SIGKILL");
+        throw e;
+      }
+      const { exitCode } = await result;
+
+      const npmPid = Number(fs.readFileSync(npmPidFile, "utf8"));
+      const npmStopped = await waitUntil(() => !isRunning(npmPid), 5000).then(
+        () => true,
+        () => false,
+      );
+      if (!npmStopped) {
+        // Don't leave the fake npm behind when the test fails.
+        process.kill(npmPid, "SIGKILL");
+      }
+      return { exitCode, leftoverEnvironments: temporaryEnvironments(), npmStopped };
+    }
+
+    // The fake npm, process groups and process.kill(-pid) are POSIX-only.
+    if (process.platform !== "win32") {
+      ["compile", "run"].forEach((command) => {
+        test(
+          `Ctrl+C during the @dataform/core installation of ${command} removes the temporary ` +
+            "environment",
+          { timeout: 60000 },
+          async () => {
+            const result = await interruptDuringCoreInstallation(command, "SIGINT", "processGroup");
+
+            expect(result.exitCode).equals(130);
+            expect(result.leftoverEnvironments).deep.equals([]);
+            expect(result.npmStopped).equals(true);
+          },
+        );
+      });
+
+      test(
+        "SIGTERM sent only to the CLI process stops npm and removes the temporary environment",
+        { timeout: 60000 },
+        async () => {
+          const result = await interruptDuringCoreInstallation("compile", "SIGTERM", "cliProcess");
+
+          expect(result.exitCode).equals(143);
+          expect(result.npmStopped).equals(true);
+          expect(result.leftoverEnvironments).deep.equals([]);
+        },
+      );
+    }
+  });
+
+  suite("stateless-install project copy", ({ afterEach }) => {
+    const tmpDirFixture = new TmpDirFixture(afterEach);
+
+    // dataformCoreVersion triggers the stateless install path, where compile() copies the
+    // project through the copy filter before compiling the copy.
+    function setUpStatelessProject() {
+      const projectDir = tmpDirFixture.createNewTmpDir();
+      fs.writeFileSync(
+        path.join(projectDir, "workflow_settings.yaml"),
+        dumpYaml({
+          defaultProject: INTEGRATION_TEST_PROJECT,
+          defaultLocation: INTEGRATION_TEST_LOCATION,
+          defaultDataset: "dataform",
+          dataformCoreVersion: "3.0.50",
+        }),
+      );
+      const env = { ...process.env, NPM_CONFIG_CACHE: tmpDirFixture.createNewTmpDir() };
+      const compileProject = (args = ["--json"]) =>
+        runCli("compile", [projectDir, ...args], { env });
+      return { projectDir, compileProject };
+    }
+
+    test(
+      "compiles inputs that definitions/ and includes/ reach through symlinks into gitignored paths",
+      { timeout: 60000 },
+      async () => {
+        const { projectDir, compileProject } = setUpStatelessProject();
+        fs.writeFileSync(path.join(projectDir, ".gitignore"), "generated/\n");
+        // definitions -> generated/definitions, and includes/constants.js ->
+        // ../generated/includes/constants.js, both inside the gitignored directory.
+        fs.ensureDirSync(path.join(projectDir, "generated", "definitions", "nested"));
+        fs.writeFileSync(
+          path.join(projectDir, "generated", "definitions", "table.sqlx"),
+          `config { type: "table" }\nSELECT "\${constants.VALUE}" AS id`,
+        );
+        fs.writeFileSync(
+          path.join(projectDir, "generated", "definitions", "nested", "other_table.sqlx"),
+          `config { type: "table" }\nSELECT 2 AS id`,
+        );
+        fs.ensureDirSync(path.join(projectDir, "generated", "includes"));
+        fs.writeFileSync(
+          path.join(projectDir, "generated", "includes", "constants.js"),
+          `module.exports = { VALUE: "from_include" };`,
+        );
+        fs.symlinkSync(path.join("generated", "definitions"), path.join(projectDir, "definitions"));
+        fs.ensureDirSync(path.join(projectDir, "includes"));
+        fs.symlinkSync(
+          path.join("..", "generated", "includes", "constants.js"),
+          path.join(projectDir, "includes", "constants.js"),
+        );
+
+        const result = await compileProject();
+
+        expect(result.exitCode, `compile failed: ${result.stderr}`).equals(0);
+        const tables: dataform.ITable[] = JSON.parse(result.stdout).tables ?? [];
+        expect(tables.map((table) => table.target.name).sort()).deep.equals([
+          "other_table",
+          "table",
+        ]);
+        expect(tables.find((table) => table.target.name === "table").query).contains(
+          "from_include",
+        );
+      },
+    );
+
+    test(
+      "compiles gitignored definitions reached through a symlink to the project root",
+      { timeout: 60000 },
+      async () => {
+        const { projectDir, compileProject } = setUpStatelessProject();
+        fs.writeFileSync(path.join(projectDir, ".gitignore"), "generated/\n");
+        fs.ensureDirSync(path.join(projectDir, "generated"));
+        fs.writeFileSync(
+          path.join(projectDir, "generated", "table.sqlx"),
+          `config { type: "table" }\nSELECT 1 AS id`,
+        );
+        // Compilation's glob follows definitions -> . into generated/.
+        fs.symlinkSync(".", path.join(projectDir, "definitions"));
+
+        const result = await compileProject();
+
+        expect(result.exitCode, `compile failed: ${result.stderr}`).equals(0);
+        const tables: dataform.ITable[] = JSON.parse(result.stdout).tables ?? [];
+        expect(tables.map((table) => table.target.name)).deep.equals(["table"]);
+      },
+    );
+
+    test(
+      "explains a gitignored file actions.yaml references, removes the copy, and compiles it once re-included",
+      { timeout: 60000 },
+      async () => {
+        const { projectDir, compileProject } = setUpStatelessProject();
+        fs.writeFileSync(path.join(projectDir, ".gitignore"), "queries/\n");
+        fs.ensureDirSync(path.join(projectDir, "definitions"));
+        fs.writeFileSync(
+          path.join(projectDir, "definitions", "actions.yaml"),
+          dumpYaml({
+            actions: [{ table: { name: "example", filename: "../queries/example.sql" } }],
+          }),
+        );
+        fs.ensureDirSync(path.join(projectDir, "queries"));
+        fs.writeFileSync(path.join(projectDir, "queries", "example.sql"), "SELECT 1 AS id");
+        const excludedResult = await compileProject(["--json", "--verbose"]);
+
+        expect(excludedResult.exitCode).not.equals(0);
+        expect(excludedResult.stderr).contains(
+          "'queries' is in the project but not in the copy compiled for dataformCoreVersion",
+        );
+        const copyPath = /Copying project to temporary directory: (.+)/.exec(
+          excludedResult.stderr,
+        )?.[1];
+        expect(copyPath, excludedResult.stderr).to.not.equal(undefined);
+        expect(fs.existsSync(copyPath)).equals(false);
+
+        fs.writeFileSync(path.join(projectDir, ".dataformignore"), "!/queries/\n");
+        const result = await compileProject();
+
+        expect(result.exitCode, `compile failed: ${result.stderr}`).equals(0);
+        const tables: dataform.ITable[] = JSON.parse(result.stdout).tables ?? [];
+        expect(tables.map((table) => table.query.trim())).deep.equals(["SELECT 1 AS id"]);
+      },
+    );
+
+    test(
+      "explains a gitignored helper a definition requires, in JSON and console output",
+      { timeout: 60000 },
+      async () => {
+        const { projectDir, compileProject } = setUpStatelessProject();
+        fs.writeFileSync(path.join(projectDir, ".gitignore"), "lib/\n");
+        fs.ensureDirSync(path.join(projectDir, "lib"));
+        fs.writeFileSync(
+          path.join(projectDir, "lib", "helper.js"),
+          `module.exports = { VALUE: "from_helper" };`,
+        );
+        fs.ensureDirSync(path.join(projectDir, "definitions"));
+        fs.writeFileSync(
+          path.join(projectDir, "definitions", "table.js"),
+          // Extensionless, as helpers are usually required.
+          `const helper = require("lib/helper");\n` +
+            `publish("table").query(\`SELECT "\${helper.VALUE}" AS id\`);`,
+        );
+        const note =
+          "Note: 'lib' is in the project but not in the copy compiled for dataformCoreVersion, " +
+          "because .gitignore or .dataformignore excludes it. If module 'lib/helper' is " +
+          "there, re-include it in .dataformignore.";
+
+        // An uncaught require() becomes a graph compilation error rather than a thrown one,
+        // which is reported unchanged, with the note printed alongside it.
+        const jsonResult = await compileProject();
+        expect(jsonResult.exitCode).not.equals(0);
+        const compilationErrors: dataform.ICompilationError[] = JSON.parse(jsonResult.stdout)
+          .graphErrors.compilationErrors;
+        expect(compilationErrors).to.have.length(1);
+        // The runner may name the requiring file after the module.
+        expect(compilationErrors[0].message).to.match(/^Cannot find module 'lib\/helper'/);
+        expect(compilationErrors[0].message).not.contains(".dataformignore");
+        expect(jsonResult.stderr).contains(note);
+        const consoleResult = await compileProject([]);
+        expect(consoleResult.stderr).contains(note);
+
+        fs.writeFileSync(path.join(projectDir, ".dataformignore"), "!/lib/\n");
+        const result = await compileProject();
+
+        expect(result.exitCode, `compile failed: ${result.stderr}`).equals(0);
+        const tables: dataform.ITable[] = JSON.parse(result.stdout).tables ?? [];
+        expect(tables.map((table) => table.query.trim())).deep.equals([
+          'SELECT "from_helper" AS id',
+        ]);
+      },
+    );
   });
 
   suite("disable-assertions flag (compilation)", ({ afterEach, beforeEach }) => {
@@ -161,7 +436,7 @@ suite("compile", () => {
         `
 config { type: "assertion" }
 SELECT 1 WHERE FALSE
-`
+`,
       );
 
       writeDefinitionFile(
@@ -175,7 +450,7 @@ config {
   }
 }
 SELECT 1 as id
-`
+`,
       );
     }
 
@@ -190,34 +465,34 @@ SELECT 1 as id
           canonicalTarget: {
             database: INTEGRATION_TEST_PROJECT,
             name: "dataform_example_table_assertions_uniqueKey_0",
-            schema: "dataform_assertions"
+            schema: "dataform_assertions",
           },
           dependencyTargets: [
             {
               database: INTEGRATION_TEST_PROJECT,
               name: "example_table",
-              schema: "dataform"
-            }
+              schema: "dataform",
+            },
           ],
           disabled: true,
           fileName: "definitions/example_table.sqlx",
           parentAction: {
             database: INTEGRATION_TEST_PROJECT,
             name: "example_table",
-            schema: "dataform"
+            schema: "dataform",
           },
           query: `\nSELECT\n  *\nFROM (\n  SELECT\n    id,\n    COUNT(1) AS index_row_count\n  FROM \`${INTEGRATION_TEST_PROJECT}.dataform.example_table\`\n  GROUP BY id\n  ) AS data\nWHERE index_row_count > 1\n`,
           target: {
             database: INTEGRATION_TEST_PROJECT,
             name: "dataform_example_table_assertions_uniqueKey_0",
-            schema: "dataform_assertions"
-          }
+            schema: "dataform_assertions",
+          },
         },
         {
           canonicalTarget: {
             database: INTEGRATION_TEST_PROJECT,
             name: "test_assertion",
-            schema: "dataform_assertions"
+            schema: "dataform_assertions",
           },
           disabled: true,
           fileName: "definitions/test_assertion.sqlx",
@@ -225,9 +500,9 @@ SELECT 1 as id
           target: {
             database: INTEGRATION_TEST_PROJECT,
             name: "test_assertion",
-            schema: "dataform_assertions"
-          }
-        }
+            schema: "dataform_assertions",
+          },
+        },
       ],
       dataformCoreVersion: version,
       graphErrors: {},
@@ -238,14 +513,14 @@ SELECT 1 as id
         defaultLocation: INTEGRATION_TEST_LOCATION,
         defaultSchema: "dataform",
         disableAssertions: true,
-        warehouse: "bigquery"
+        warehouse: "bigquery",
       },
       tables: [
         {
           canonicalTarget: {
             database: INTEGRATION_TEST_PROJECT,
             name: "example_table",
-            schema: "dataform"
+            schema: "dataform",
           },
           disabled: false,
           enumType: "TABLE",
@@ -255,28 +530,28 @@ SELECT 1 as id
           target: {
             database: INTEGRATION_TEST_PROJECT,
             name: "example_table",
-            schema: "dataform"
+            schema: "dataform",
           },
-          type: "table"
-        }
+          type: "table",
+        },
       ],
       targets: [
         {
           database: INTEGRATION_TEST_PROJECT,
           name: "dataform_example_table_assertions_uniqueKey_0",
-          schema: "dataform_assertions"
+          schema: "dataform_assertions",
         },
         {
           database: INTEGRATION_TEST_PROJECT,
           name: "example_table",
-          schema: "dataform"
+          schema: "dataform",
         },
         {
           database: INTEGRATION_TEST_PROJECT,
           name: "test_assertion",
-          schema: "dataform_assertions"
-        }
-      ]
+          schema: "dataform_assertions",
+        },
+      ],
     };
 
     test("with --disable-assertions flag", async () => {
@@ -316,17 +591,17 @@ SELECT 1 as id
       writeDefinitionFile(
         projectDir,
         "upstream.sqlx",
-        `config { type: "table", tags: ["daily"] }\nSELECT 1 AS id`
+        `config { type: "table", tags: ["daily"] }\nSELECT 1 AS id`,
       );
       writeDefinitionFile(
         projectDir,
         "midstream.sqlx",
-        `config { type: "table" }\nSELECT * FROM \${ref("upstream")}`
+        `config { type: "table" }\nSELECT * FROM \${ref("upstream")}`,
       );
       writeDefinitionFile(
         projectDir,
         "downstream.sqlx",
-        `config { type: "table" }\nSELECT * FROM \${ref("midstream")}`
+        `config { type: "table" }\nSELECT * FROM \${ref("midstream")}`,
       );
     });
 
@@ -341,13 +616,13 @@ SELECT 1 as id
         projectDir,
         "--output-actions",
         "midstream",
-        "--json"
+        "--json",
       ]);
       expect(result.exitCode, result.stderr).equals(0);
       expect(tableNames(result.stdout)).deep.equals(["midstream"]);
       // `targets` is printed alongside the actions, so it must be pruned too.
       expect(JSON.parse(result.stdout).targets.map((target: any) => target.name)).deep.equals([
-        "midstream"
+        "midstream",
       ]);
     });
 
@@ -357,7 +632,7 @@ SELECT 1 as id
         "--output-actions",
         "midstream",
         "--output-include-deps",
-        "--json"
+        "--json",
       ]);
       expect(result.exitCode, result.stderr).equals(0);
       expect(tableNames(result.stdout)).deep.equals(["midstream", "upstream"]);
@@ -369,7 +644,7 @@ SELECT 1 as id
         "--output-actions",
         "midstream",
         "--output-include-dependents",
-        "--json"
+        "--json",
       ]);
       expect(result.exitCode, result.stderr).equals(0);
       expect(tableNames(result.stdout)).deep.equals(["downstream", "midstream"]);
@@ -404,8 +679,8 @@ SELECT 1 as id
         defaultAssertionDataset: "dataform_assertions",
         extension: {
           name: "test-extension",
-          compilationMode: dataform.ExtensionCompilationMode.PROLOGUE
-        }
+          compilationMode: dataform.ExtensionCompilationMode.PROLOGUE,
+        },
       });
 
       const compileResult = await runCli("compile", [projectDir]);
@@ -415,3 +690,22 @@ SELECT 1 as id
     });
   });
 });
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+}
+
+async function waitUntil(condition: () => boolean, timeoutMillis = 30000) {
+  const deadline = Date.now() + timeoutMillis;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Condition not met within ${timeoutMillis}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}

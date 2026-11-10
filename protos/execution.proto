@@ -54,6 +54,8 @@ message ExecutionAction {
 
   string jit_code = 12;
 
+  bool has_output = 13;
+
   reserved 1, 3, 7;
 }
 
@@ -126,9 +128,9 @@ message TaskResult {
   string error_message = 2;
   Timing timing = 3;
   ExecutionMetadata metadata = 4;
-  // SQL that would be executed. Populated only during --dry-run so that
-  // dry-run output can include the query — particularly for JiT actions
-  // whose SQL is only available after runtime compilation.
+  // SQL that would be executed. Populated only during --dry-run or when executed
+  // SQL differs from the tasks statement (for example when wrapped in create schema
+  // if not exists)
   string compiled_sql = 5;
 }
 

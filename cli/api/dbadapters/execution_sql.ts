@@ -1,6 +1,7 @@
 import * as semver from "semver";
 
-import { concatenateQueries, Task, Tasks } from "df/cli/api/dbadapters/tasks";
+import { Task, Tasks } from "df/cli/api/dbadapters/tasks";
+import { concatenateQueries } from "df/cli/api/utils/query_transforms";
 import { ErrorWithCause } from "df/common/errors/errors";
 import { CompilationSql } from "df/core/compilation_sql";
 import { tableTypeEnumToString } from "df/core/utils";
@@ -19,7 +20,8 @@ export class ExecutionSql {
   constructor(
     private readonly project: dataform.IProjectConfig,
     private readonly dataformCoreVersion: string,
-    private readonly uniqueIdGenerator: () => string = () => Math.random().toString(36).substring(2)
+    private readonly uniqueIdGenerator: () => string = () =>
+      Math.random().toString(36).substring(2),
   ) {
     this.CompilationSql = new CompilationSql(project, dataformCoreVersion);
   }
@@ -77,7 +79,7 @@ from (${query}) as insertions`;
   public shouldWriteIncrementally(
     table: dataform.ITable,
     runConfig: dataform.IRunConfig,
-    tableMetadata?: dataform.ITableMetadata
+    tableMetadata?: dataform.ITableMetadata,
   ) {
     return (
       (!runConfig.fullRefresh || table.protected) &&
@@ -89,7 +91,7 @@ from (${query}) as insertions`;
   public preOps(
     table: dataform.ITable,
     runConfig: dataform.IRunConfig,
-    tableMetadata?: dataform.ITableMetadata
+    tableMetadata?: dataform.ITableMetadata,
   ): Task[] {
     let preOps = table.preOps;
     if (
@@ -99,13 +101,13 @@ from (${query}) as insertions`;
     ) {
       preOps = table.incrementalPreOps;
     }
-    return (preOps || []).map(pre => Task.statement(pre));
+    return (preOps || []).map((pre) => Task.statement(pre));
   }
 
   public postOps(
     table: dataform.ITable,
     runConfig: dataform.IRunConfig,
-    tableMetadata?: dataform.ITableMetadata
+    tableMetadata?: dataform.ITableMetadata,
   ): Task[] {
     let postOps = table.postOps;
     if (
@@ -115,7 +117,7 @@ from (${query}) as insertions`;
     ) {
       postOps = table.incrementalPostOps;
     }
-    return (postOps || []).map(post => Task.statement(post));
+    return (postOps || []).map((post) => Task.statement(post));
   }
 
   public resolveTarget(target: dataform.ITarget) {
@@ -129,16 +131,16 @@ from (${query}) as insertions`;
   public publishTasks(
     table: dataform.ITable,
     runConfig: dataform.IRunConfig,
-    tableMetadata?: dataform.ITableMetadata
+    tableMetadata?: dataform.ITableMetadata,
   ): Tasks {
     const tasks = new Tasks();
 
-    this.preOps(table, runConfig, tableMetadata).forEach(statement => tasks.add(statement));
+    this.preOps(table, runConfig, tableMetadata).forEach((statement) => tasks.add(statement));
 
     const baseTableType = this.baseTableType(table.enumType);
     if (tableMetadata && tableMetadata.type !== baseTableType) {
       tasks.add(
-        Task.statement(this.dropIfExists(table.target, this.oppositeTableType(baseTableType)))
+        Task.statement(this.dropIfExists(table.target, this.oppositeTableType(baseTableType))),
       );
     }
 
@@ -152,9 +154,9 @@ from (${query}) as insertions`;
           case dataform.OnSchemaChange.EXTEND:
           case dataform.OnSchemaChange.SYNCHRONIZE:
             this.buildIncrementalSchemaChangeTasks(tasks, table);
-            // Fall through to run the static DML after the procedure alters the schema
+          // Fall through to run the static DML after the procedure alters the schema
           case dataform.OnSchemaChange.IGNORE:
-            const columns = tableMetadata?.fields.map(f => f.name) || [];
+            const columns = tableMetadata?.fields.map((f) => f.name) || [];
             tasks.add(Task.statement(this.getIncrementalDmlStatement(table, columns)));
             break;
         }
@@ -163,7 +165,7 @@ from (${query}) as insertions`;
       tasks.add(Task.statement(this.createOrReplace(table)));
     }
 
-    this.postOps(table, runConfig, tableMetadata).forEach(statement => tasks.add(statement));
+    this.postOps(table, runConfig, tableMetadata).forEach((statement) => tasks.add(statement));
 
     return tasks.concatenate();
   }
@@ -171,21 +173,25 @@ from (${query}) as insertions`;
   public createTableTasks(
     table: dataform.ITable,
     runConfig: dataform.IRunConfig,
-    tableMetadata?: dataform.ITableMetadata
+    tableMetadata?: dataform.ITableMetadata,
   ): dataform.IExecutionTask[] {
     return table.disabled ? [] : this.publishTasks(table, runConfig, tableMetadata).build();
   }
 
   public createOperationTasks(operation: dataform.IOperation): dataform.IExecutionTask[] {
-    return operation.disabled
-      ? []
-      : operation.queries.map(statement =>
-          dataform.ExecutionTask.create({ type: "statement", statement })
-        );
+    if (operation.disabled) {
+      return [];
+    }
+    const queries = (operation.queries || []).filter((query) => !!query?.trim());
+    if (queries.length === 0) {
+      return [];
+    }
+    const statement = queries.length === 1 ? queries[0] : concatenateQueries(queries);
+    return [dataform.ExecutionTask.create({ type: "statement", statement })];
   }
 
   public createPropertyGraphTasks(
-    propertyGraph: dataform.IPropertyGraph
+    propertyGraph: dataform.IPropertyGraph,
   ): dataform.IExecutionTask[] {
     const statement =
       `CREATE OR REPLACE PROPERTY GRAPH ${this.resolveTarget(propertyGraph.target)} ` +
@@ -215,14 +221,14 @@ from (${query}) as insertions`;
     return `drop ${this.tableTypeAsSql(type)} if exists ${this.resolveTarget(target)}`;
   }
 
-  private buildIncrementalPredicatesString(
-    incrementalPredicates?: string[] | null
-  ): string {
-    const validPredicates = incrementalPredicates ? incrementalPredicates.filter(p => p.trim() !== "") : [];
+  private buildIncrementalPredicatesString(incrementalPredicates?: string[] | null): string {
+    const validPredicates = incrementalPredicates
+      ? incrementalPredicates.filter((p) => p.trim() !== "")
+      : [];
     if (validPredicates.length === 0) {
       return "";
     }
-    return `and ${validPredicates.map(p => `(${p})`).join(" and ")}`;
+    return `and ${validPredicates.map((p) => `(${p})`).join(" and ")}`;
   }
 
   private buildIncrementalSchemaChangeTasks(tasks: Tasks, table: dataform.ITable) {
@@ -230,14 +236,14 @@ from (${query}) as insertions`;
 
     const emptyTempTableTarget = {
       ...table.target,
-      name: `${table.target.name}_df_temp_${uniqueId}_empty`
+      name: `${table.target.name}_df_temp_${uniqueId}_empty`,
     };
 
     const procedureName = this.createProcedureName(table.target, uniqueId);
     const procedureBody = this.incrementalSchemaChangeBody(
       table,
       this.resolveTarget(table.target),
-      emptyTempTableTarget
+      emptyTempTableTarget,
     );
 
     const createProcedureSql = `CREATE OR REPLACE PROCEDURE ${procedureName}()
@@ -248,7 +254,7 @@ END;`;
 
     const callProcedureSql = this.safeCallAndDropProcedure(
       procedureName,
-      this.resolveTarget(emptyTempTableTarget)
+      this.resolveTarget(emptyTempTableTarget),
     );
     tasks.add(Task.statement(createProcedureSql));
     tasks.add(Task.statement(callProcedureSql));
@@ -257,14 +263,11 @@ END;`;
   private createProcedureName(target: dataform.ITarget, uniqueId: string): string {
     return this.resolveTarget({
       ...target,
-      name: `df_osc_${uniqueId}`
+      name: `df_osc_${uniqueId}`,
     });
   }
 
-  private safeCallAndDropProcedure(
-    procedureName: string,
-    emptyTempTableName: string
-  ): string {
+  private safeCallAndDropProcedure(procedureName: string, emptyTempTableName: string): string {
     return `
 BEGIN
   CALL ${procedureName}();
@@ -274,6 +277,20 @@ EXCEPTION WHEN ERROR THEN
   RAISE;
 END;
 DROP PROCEDURE IF EXISTS ${procedureName};`;
+  }
+
+  private declareSchemaChangeVariablesSql(onSchemaChange: dataform.OnSchemaChange): string {
+    let sql = `
+-- Declare variables for schema comparison and strategy execution.
+DECLARE dataform_columns ARRAY<STRING>;
+DECLARE temp_table_columns ARRAY<STRUCT<column_name STRING, data_type STRING>>;
+DECLARE columns_added ARRAY<STRUCT<column_name STRING, data_type STRING>>;
+DECLARE columns_removed ARRAY<STRING>;`;
+
+    if (onSchemaChange === dataform.OnSchemaChange.SYNCHRONIZE) {
+      sql += `\nDECLARE invalid_removed_columns ARRAY<STRING>;`;
+    }
+    return sql;
   }
 
   private createEmptyTempTableSql(emptyTempTableName: string, query: string): string {
@@ -286,15 +303,10 @@ CREATE OR REPLACE TABLE ${emptyTempTableName} AS (
 
   private compareSchemasSql(
     target: dataform.ITarget,
-    emptyTempTableTarget: dataform.ITarget
+    emptyTempTableTarget: dataform.ITarget,
   ): string {
     return `
 -- Compare schemas
-DECLARE dataform_columns ARRAY<STRING>;
-DECLARE temp_table_columns ARRAY<STRUCT<column_name STRING, data_type STRING>>;
-DECLARE columns_added ARRAY<STRUCT<column_name STRING, data_type STRING>>;
-DECLARE columns_removed ARRAY<STRING>;
-
 SET dataform_columns = (
   SELECT IFNULL(ARRAY_AGG(DISTINCT column_name), [])
   FROM \`${target.database}.${target.schema}.INFORMATION_SCHEMA.COLUMNS\`
@@ -321,7 +333,7 @@ SET columns_removed = (
 
   private applySchemaChangeStrategySql(
     table: dataform.ITable,
-    qualifiedTargetTableName: string
+    qualifiedTargetTableName: string,
   ): string {
     const onSchemaChange = table.onSchemaChange || dataform.OnSchemaChange.IGNORE;
     let sql = `
@@ -354,7 +366,6 @@ ${this.alterTableAddColumnsSql(qualifiedTargetTableName)}
       case dataform.OnSchemaChange.SYNCHRONIZE:
         const uniqueKeys = table.uniqueKey || [];
         sql += `
-DECLARE invalid_removed_columns ARRAY<STRING>;
 SET invalid_removed_columns = (
   SELECT IFNULL(ARRAY_AGG(col), []) FROM UNNEST(columns_removed) AS col WHERE col IN UNNEST(${JSON.stringify(uniqueKeys)})
 );
@@ -405,18 +416,17 @@ DROP TABLE IF EXISTS ${emptyTempTableName};
   private incrementalSchemaChangeBody(
     table: dataform.ITable,
     qualifiedTargetTableName: string,
-    emptyTempTableTarget: dataform.ITarget
+    emptyTempTableTarget: dataform.ITarget,
   ): string {
     const emptyTempTableName = this.resolveTarget(emptyTempTableTarget);
     const query = this.getIncrementalQuery(table);
+    const onSchemaChange = table.onSchemaChange || dataform.OnSchemaChange.IGNORE;
     const statements: string[] = [
+      this.declareSchemaChangeVariablesSql(onSchemaChange),
       this.createEmptyTempTableSql(emptyTempTableName, query),
-      this.compareSchemasSql(
-        table.target,
-        emptyTempTableTarget
-      ),
+      this.compareSchemasSql(table.target, emptyTempTableTarget),
       this.applySchemaChangeStrategySql(table, qualifiedTargetTableName),
-      this.cleanupSql(emptyTempTableName)
+      this.cleanupSql(emptyTempTableName),
     ];
 
     return statements.join("\n\n");
@@ -437,7 +447,7 @@ DROP TABLE IF EXISTS ${emptyTempTableName};
     }
 
     return `create or replace ${table.materialized ? "materialized " : ""}${this.tableTypeAsSql(
-      this.baseTableType(table.enumType)
+      this.baseTableType(table.enumType),
     )} ${this.resolveTarget(table.target)} ${
       table.bigquery && table.bigquery.partitionBy
         ? `partition by ${table.bigquery.partitionBy} `
@@ -459,20 +469,21 @@ DROP TABLE IF EXISTS ${emptyTempTableName};
     columns: string[],
     query: string,
     uniqueKey: string[],
-    bigquery: dataform.IBigQueryOptions
+    bigquery: dataform.IBigQueryOptions,
   ) {
     const updatePartitionFilter = bigquery && bigquery.updatePartitionFilter;
     const incrementalPredicates = bigquery && bigquery.incrementalPredicates;
-    const incrementalPredicatesString = this.buildIncrementalPredicatesString(incrementalPredicates);
-    const backtickedColumns = columns.map(column => `\`${column}\``);
+    const incrementalPredicatesString =
+      this.buildIncrementalPredicatesString(incrementalPredicates);
+    const backtickedColumns = columns.map((column) => `\`${column}\``);
     return `
 merge ${this.resolveTarget(target)} DATAFORM_DEST
 using (${query}
 ) DATAFORM_SOURCE
-on ${uniqueKey.map(uniqueKeyCol => `DATAFORM_DEST.${uniqueKeyCol} = DATAFORM_SOURCE.${uniqueKeyCol}`).join(` and `)} ${updatePartitionFilter ? `and DATAFORM_DEST.${updatePartitionFilter}` : ""}
+on ${uniqueKey.map((uniqueKeyCol) => `DATAFORM_DEST.${uniqueKeyCol} = DATAFORM_SOURCE.${uniqueKeyCol}`).join(` and `)} ${updatePartitionFilter ? `and DATAFORM_DEST.${updatePartitionFilter}` : ""}
 ${incrementalPredicatesString ? ` ${incrementalPredicatesString}` : ""}
 when matched then
-  update set ${columns.map(column => `\`${column}\` = DATAFORM_SOURCE.${column}`).join(",")}
+  update set ${columns.map((column) => `\`${column}\` = DATAFORM_SOURCE.${column}`).join(",")}
 when not matched then
   insert (${backtickedColumns.join(",")}) values (${backtickedColumns.join(",")})`;
   }
@@ -481,15 +492,16 @@ when not matched then
     target: dataform.ITarget,
     columns: string[],
     query: string,
-    bigquery: dataform.IBigQueryOptions
+    bigquery: dataform.IBigQueryOptions,
   ): string {
     const partitionBy = bigquery && bigquery.partitionBy;
     const updatePartitionFilter = bigquery && bigquery.updatePartitionFilter;
     const incrementalPredicates = bigquery && bigquery.incrementalPredicates;
-    const incrementalPredicatesString = this.buildIncrementalPredicatesString(incrementalPredicates);
+    const incrementalPredicatesString =
+      this.buildIncrementalPredicatesString(incrementalPredicates);
     const uniqueId = this.uniqueIdGenerator();
     const stagingTableUnqualified = `staging_table_temp_${uniqueId}`;
-    const backtickedColumns = columns.map(column => `\`${column}\``);
+    const backtickedColumns = columns.map((column) => `\`${column}\``);
     const resolveTargetTable = this.resolveTarget(target);
 
     return `CREATE OR REPLACE TEMP TABLE \`${stagingTableUnqualified}\` AS (
@@ -519,20 +531,12 @@ END;
 DROP TABLE IF EXISTS \`${stagingTableUnqualified}\`;`;
   }
 
-  private getIncrementalDmlStatement(
-    table: dataform.ITable,
-    columns: string[]
-  ): string {
+  private getIncrementalDmlStatement(table: dataform.ITable, columns: string[]): string {
     const incrementalQuery = this.getIncrementalQuery(table);
 
     switch (table.incrementalStrategy) {
       case dataform.IncrementalStrategy.INSERT_OVERWRITE:
-        return this.insertOverwrite(
-          table.target,
-          columns,
-          incrementalQuery,
-          table.bigquery
-        );
+        return this.insertOverwrite(table.target, columns, incrementalQuery, table.bigquery);
       case dataform.IncrementalStrategy.MERGE:
       default:
         if (table.uniqueKey && table.uniqueKey.length > 0) {
@@ -541,13 +545,13 @@ DROP TABLE IF EXISTS \`${stagingTableUnqualified}\`;`;
             columns,
             incrementalQuery,
             table.uniqueKey,
-            table.bigquery
+            table.bigquery,
           );
         }
         return this.insertInto(
           table.target,
-          columns.map(column => `\`${column}\``),
-          incrementalQuery
+          columns.map((column) => `\`${column}\``),
+          incrementalQuery,
         );
     }
   }
@@ -556,7 +560,7 @@ DROP TABLE IF EXISTS \`${stagingTableUnqualified}\`;`;
 export function collectEvaluationQueries(
   queryOrAction: QueryOrAction,
   concatenate: boolean,
-  queryModifier: (mod: string) => string = (q: string) => q
+  queryModifier: (mod: string) => string = (q: string) => q,
 ): IValidationQuery[] {
   // TODO: The prefix method (via `queryModifier`) is a bit sketchy. For example after
   // attaching the `explain` prefix, a table or operation could look like this:
@@ -575,37 +579,37 @@ export function collectEvaluationQueries(
         if (queryOrAction.enumType === dataform.TableType.INCREMENTAL) {
           const incrementalTableQueries = queryOrAction.incrementalPreOps.concat(
             queryOrAction.incrementalQuery,
-            queryOrAction.incrementalPostOps
+            queryOrAction.incrementalPostOps,
           );
           if (concatenate) {
             validationQueries.push({
               query: concatenateQueries(incrementalTableQueries, queryModifier),
-              incremental: true
+              incremental: true,
             });
           } else {
-            incrementalTableQueries.forEach(q =>
-              validationQueries.push({ query: queryModifier(q), incremental: true })
+            incrementalTableQueries.forEach((q) =>
+              validationQueries.push({ query: queryModifier(q), incremental: true }),
             );
           }
         }
         const tableQueries = queryOrAction.preOps.concat(
           queryOrAction.query,
-          queryOrAction.postOps
+          queryOrAction.postOps,
         );
         if (concatenate) {
           validationQueries.push({
-            query: concatenateQueries(tableQueries, queryModifier)
+            query: concatenateQueries(tableQueries, queryModifier),
           });
         } else {
-          tableQueries.forEach(q => validationQueries.push({ query: queryModifier(q) }));
+          tableQueries.forEach((q) => validationQueries.push({ query: queryModifier(q) }));
         }
       } else if (queryOrAction instanceof dataform.Operation) {
         if (concatenate) {
           validationQueries.push({
-            query: concatenateQueries(queryOrAction.queries, queryModifier)
+            query: concatenateQueries(queryOrAction.queries, queryModifier),
           });
         } else {
-          queryOrAction.queries.forEach(q => validationQueries.push({ query: queryModifier(q) }));
+          queryOrAction.queries.forEach((q) => validationQueries.push({ query: queryModifier(q) }));
         }
       } else if (queryOrAction instanceof dataform.Assertion) {
         validationQueries.push({ query: queryModifier(queryOrAction.query) });
@@ -617,6 +621,6 @@ export function collectEvaluationQueries(
     }
   }
   return validationQueries
-    .map(validationQuery => ({ query: validationQuery.query.trim(), ...validationQuery }))
-    .filter(validationQuery => !!validationQuery.query);
+    .map((validationQuery) => ({ query: validationQuery.query.trim(), ...validationQuery }))
+    .filter((validationQuery) => !!validationQuery.query);
 }

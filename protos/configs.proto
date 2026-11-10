@@ -15,7 +15,11 @@ import "property_graph_config.proto";
 // Workflow Settings defines the contents of the `workflow_settings.yaml`
 // configuration file.
 message WorkflowSettings {
-  // The desired dataform core version to compile against.
+  // The desired dataform core version to compile against. When set, the CLI
+  // installs this version into a copy of the project in a temporary directory
+  // and compiles the copy, which skips paths matched by `.gitignore` or
+  // `.dataformignore` outside `definitions/` and `includes/`. For details, see
+  // https://dataform-co.github.io/dataform/docs/stateless-install.
   string dataform_core_version = 1;
 
   // Required. The default Google Cloud project (database).
@@ -75,6 +79,27 @@ message WorkflowSettings {
 
   // Optional. Configuration for Knowledge Catalog lineage emission.
   LineageSettings lineage = 19;
+
+  // Optional. Default key-value pairs for BigQuery job labels applied to
+  // BigQuery jobs executed for actions in this project. Merged key-by-key when
+  // overridden via `projectConfigOverride`. Action-level `jobLabels` override
+  // matching keys; an action can't remove a default key. Built-in assertions
+  // use the job labels of their table. When an action has any job labels,
+  // including these defaults, the Dataform CLI doesn't also apply the table's
+  // `labels` to its jobs. `dataform run --job-labels` overrides matching keys.
+  // Keys and values can contain only lowercase ASCII letters, numbers,
+  // underscores and hyphens, and can be at most 63 characters long. Keys must
+  // start with a lowercase letter; values can be empty. An action can have at
+  // most 32 job labels, including these defaults. Keys that start with
+  // `dataform_`, `dataform-`, `dataprep-`, `gcp-` or `goog-` are reserved, as
+  // are `bigquery-workflow`, `single-file-asset-type`, `origin`, `bq-dea` and
+  // `data-preparation-file-loader`. Numbers and booleans are converted to
+  // strings, so quote values that must be kept exactly as written, for example
+  // `"0042"`.
+  map<string, string> default_job_labels = 20;
+
+  // Optional. Default config options for Lakehouse (4-part) targets.
+  DefaultLakehouseConfig default_lakehouse_config = 21;
 }
 
 // Configuration for Knowledge Catalog lineage emission.
@@ -105,6 +130,9 @@ message ActionConfig {
     // flag for when we want to add assertions of this dependency in
     // dependency_targets as well.
     bool include_dependent_assertions = 5;
+
+    // Configuration options for a Lakehouse (4-part) target.
+    LakehouseConfig lakehouse = 6;
   }
 
   message ColumnDescriptor {
@@ -187,6 +215,14 @@ message ActionConfig {
     // `gs://{bucket_name}/{table_folder_root}/{table_folder_subpath}``.
     // If `storage_uri` is provided, this value is ignored.
     string table_folder_subpath = 5;
+  }
+
+  message LakehouseConfig {
+    // The Lakehouse catalog name.
+    string catalog = 1;
+
+    // The Lakehouse namespace name.
+    string namespace = 2;
   }
 
   message TableConfig {
@@ -281,6 +317,17 @@ message ActionConfig {
     // Optional. If true, preserves existing BigQuery column governance controls
     // (e.g. data policy) when recreating a table.
     optional bool preserve_governance_controls = 25;
+
+    // Optional. Key-value pairs for BigQuery job labels applied to the query
+    // job(s) executed for this table and its built-in assertions. Overrides
+    // matching keys from `defaultJobLabels` in `workflow_settings.yaml`. When
+    // the table has any job labels, including defaults, the Dataform CLI
+    // doesn't also apply its `labels` to its jobs. See `defaultJobLabels` for
+    // the allowed keys and values.
+    map<string, string> job_labels = 26;
+
+    // Configuration options for a Lakehouse (4-part) table.
+    LakehouseConfig lakehouse = 27;
   }
 
   message Metadata {
@@ -369,6 +416,14 @@ message ActionConfig {
     // If unset, the value from workflow_settings.yaml is used. If neither is set, default BigQuery behavior applies.
     // Dataform CLI only (GCP Dataform support pending).
     string reservation = 21;
+
+    // Optional. Key-value pairs for BigQuery job labels applied to the query
+    // job(s) executed for this view and its built-in assertions. Overrides
+    // matching keys from `defaultJobLabels` in `workflow_settings.yaml`. When
+    // the view has any job labels, including defaults, the Dataform CLI
+    // doesn't also apply its `labels` to its jobs. See `defaultJobLabels` for
+    // the allowed keys and values.
+    map<string, string> job_labels = 22;
   }
 
   enum OnSchemaChange {
@@ -508,6 +563,17 @@ message ActionConfig {
     // Optional. If true, preserves existing BigQuery column governance controls
     // (e.g. data policy) when recreating a table.
     optional bool preserve_governance_controls = 30;
+
+    // Optional. Key-value pairs for BigQuery job labels applied to the query
+    // job(s) executed for this incremental table and its built-in assertions.
+    // Overrides matching keys from `defaultJobLabels` in
+    // `workflow_settings.yaml`. When the table has any job labels, including
+    // defaults, the Dataform CLI doesn't also apply its `labels` to its jobs.
+    // See `defaultJobLabels` for the allowed keys and values.
+    map<string, string> job_labels = 31;
+
+    // Configuration options for a Lakehouse (4-part) incremental table.
+    LakehouseConfig lakehouse = 32;
   }
 
   message AssertionConfig {
@@ -554,6 +620,12 @@ message ActionConfig {
 
     // Metadata for this assertion.
     Metadata metadata = 12;
+
+    // Optional. Key-value pairs for BigQuery job labels applied to the query
+    // job(s) executed for this assertion. Overrides matching keys from
+    // `defaultJobLabels` in `workflow_settings.yaml`. See `defaultJobLabels`
+    // for the allowed keys and values.
+    map<string, string> job_labels = 13;
   }
 
   message OperationConfig {
@@ -606,6 +678,15 @@ message ActionConfig {
     // If unset, the value from workflow_settings.yaml is used. If neither is set, default BigQuery behavior applies.
     // Dataform CLI only (GCP Dataform support pending).
     string reservation = 13;
+
+    // Optional. Key-value pairs for BigQuery job labels applied to the query
+    // job(s) executed for this operation. Overrides matching keys from
+    // `defaultJobLabels` in `workflow_settings.yaml`. See `defaultJobLabels`
+    // for the allowed keys and values.
+    map<string, string> job_labels = 14;
+
+    // Configuration options for a Lakehouse (4-part) operation target.
+    LakehouseConfig lakehouse = 15;
   }
 
   message DeclarationConfig {
@@ -629,6 +710,9 @@ message ActionConfig {
 
     // A list of user-defined tags with which the action should be labeled.
     repeated string tags = 7;
+
+    // Configuration options for a Lakehouse (4-part) declaration target.
+    LakehouseConfig lakehouse = 8;
   }
 
   message NotebookConfig {
@@ -697,6 +781,12 @@ message ActionConfig {
 
     LoadModeConfig load_mode = 12;
 
+    // Optional. Key-value pairs for BigQuery job labels applied to the BigQuery
+    // job(s) executed for this data preparation. Overrides matching keys from
+    // `defaultJobLabels` in `workflow_settings.yaml`. See `defaultJobLabels`
+    // for the allowed keys and values.
+    map<string, string> job_labels = 15;
+
     message ErrorTableConfig {
       // The name of the error table.
       string name = 1;
@@ -720,6 +810,7 @@ message ActionConfig {
     DeclarationConfig declaration = 6;
     NotebookConfig notebook = 7;
     DataPreparationConfig data_preparation = 8;
+    // Not supported in `actions.yaml`; use `definitions/**/graph.yaml`.
     PropertyGraphConfig property_graph = 9;
   }
 

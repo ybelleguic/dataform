@@ -8,24 +8,24 @@ import {
   suite,
   test,
   writeDefinitionFile,
-  writeWorkflowSettingsFile
+  writeWorkflowSettingsFile,
 } from "df/testing";
 import { TmpDirFixture } from "df/testing/fixtures";
 import {
   coreExecutionRequestFromPath,
   runMainInVm,
-  VALID_WORKFLOW_SETTINGS_YAML
+  VALID_WORKFLOW_SETTINGS_YAML,
 } from "df/testing/run_core";
 
 interface TestCase {
-  testName: string,
-  workflowSettings: string,
-  definitionFiles: {
-    name: string,
-    contents: string
-  }[],
-  expectedGraph? : dataform.ICompiledGraph,
-  expectedPropertyGraphs?: dataform.IPropertyGraph[]
+  testName: string;
+  workflowSettings: string;
+  definitionFiles: Array<{
+    name: string;
+    contents: string;
+  }>;
+  expectedGraph?: dataform.ICompiledGraph;
+  expectedPropertyGraphs?: dataform.IPropertyGraph[];
 }
 
 suite("property graphs", ({ afterEach }) => {
@@ -34,32 +34,39 @@ suite("property graphs", ({ afterEach }) => {
     warehouse: "bigquery",
     defaultSchema: "defaultDataset",
     defaultDatabase: "defaultProject",
-    defaultLocation: "US"
+    defaultLocation: "US",
   };
-  const graphStackTail = "\n    at CallSite {}".repeat(10);
   const graphError = (fileName: string, message: string, extra: object = {}) => ({
     fileName,
     message,
-    stack: `Error: ${message}${graphStackTail}`,
-    ...extra
+    ...extra,
   });
+  const asPlainGraph = (graph: dataform.ICompiledGraph) => {
+    const plain = asPlainObject(graph);
+    plain.graphErrors?.compilationErrors?.forEach((e: any) => {
+      expect(e.stack).to.include(`Error: ${e.message}`);
+      expect(e.stack).to.match(/\n\s+at /);
+      delete e.stack;
+    });
+    return plain;
+  };
 
   const missingRefTarget = {
     schema: "defaultDataset",
     name: "MissingRefGraph",
-    database: "defaultProject"
+    database: "defaultProject",
   };
   const declOneTarget = { schema: "one", name: "books", database: "defaultProject" };
   const declTwoTarget = { schema: "two", name: "books", database: "defaultProject" };
   const graphTarget = {
     schema: "defaultDataset",
     name: "AmbiguousRefGraph",
-    database: "defaultProject"
+    database: "defaultProject",
   };
   const collisionTarget = {
     schema: "defaultDataset",
     name: "CollisionName",
-    database: "defaultProject"
+    database: "defaultProject",
   };
   const collisionActionName = "defaultProject.defaultDataset.CollisionName";
   const collisionTargetJson = `{"schema":"defaultDataset","name":"CollisionName","database":"defaultProject"}`;
@@ -80,14 +87,16 @@ suite("property graphs", ({ afterEach }) => {
         {
           name: "graph.yaml",
           contents: `
-name: SimpleGraph
-entities:
-- name: Customer
-  dataSourceString: defaultProject.defaultDataset.customers
-  keys:
-  - id
-`
-        }
+version: 0.2.0.dev0/google
+semantic_model:
+- name: SimpleGraph
+  entities:
+  - name: Customer
+    source: bigquery:defaultProject.defaultDataset.customers
+    primary_key:
+    - id
+`,
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -100,34 +109,34 @@ entities:
             target: {
               schema: "defaultDataset",
               name: "SimpleGraph",
-              database: "defaultProject"
+              database: "defaultProject",
             },
             canonicalTarget: {
               schema: "defaultDataset",
               name: "SimpleGraph",
-              database: "defaultProject"
+              database: "defaultProject",
             },
             fileName: "definitions/graph.yaml",
             description: "",
             disabled: false,
-            entities: [
+            nodes: [
               {
                 name: "Customer",
                 dataSource: {
                   schema: "defaultDataset",
                   name: "customers",
-                  database: "defaultProject"
+                  database: "defaultProject",
                 },
-                keys: ["id"]
-              }
+                keys: ["id"],
+              },
             ],
             graphBody:
               "NODE TABLES (\n" +
-              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id)\n" +
-              ")"
-          }
-        ]
-      }
+              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id) PROPERTIES ALL COLUMNS\n" +
+              ")",
+          },
+        ],
+      },
     },
     {
       testName: "graph.yaml tags propagate into the compiled proto",
@@ -136,17 +145,19 @@ entities:
         {
           name: "graph.yaml",
           contents: `
-name: TaggedGraph
+version: 0.2.0.dev0/google
 tags:
 - nightly
 - reporting
-entities:
-- name: Customer
-  dataSourceString: defaultProject.defaultDataset.customers
-  keys:
-  - id
-`
-        }
+semantic_model:
+- name: TaggedGraph
+  entities:
+  - name: Customer
+    source: bigquery:defaultProject.defaultDataset.customers
+    primary_key:
+    - id
+`,
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -159,163 +170,35 @@ entities:
             target: {
               schema: "defaultDataset",
               name: "TaggedGraph",
-              database: "defaultProject"
+              database: "defaultProject",
             },
             canonicalTarget: {
               schema: "defaultDataset",
               name: "TaggedGraph",
-              database: "defaultProject"
+              database: "defaultProject",
             },
             fileName: "definitions/graph.yaml",
             description: "",
             disabled: false,
             tags: ["nightly", "reporting"],
-            entities: [
+            nodes: [
               {
                 name: "Customer",
                 dataSource: {
                   schema: "defaultDataset",
                   name: "customers",
-                  database: "defaultProject"
+                  database: "defaultProject",
                 },
-                keys: ["id"]
-              }
-            ],
-            graphBody:
-              "NODE TABLES (\n" +
-              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id)\n" +
-              ")"
-          }
-        ]
-      }
-    },
-    {
-      testName: "nodes-only graph compiles without EDGE TABLES",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "graph.yaml",
-          contents: `
-name: NodesOnly
-entities:
-- name: Customer
-  dataSourceString: defaultProject.defaultDataset.customers
-  keys:
-  - id
-- name: Product
-  dataSourceString: defaultProject.defaultDataset.products
-  keys:
-  - sku
-`
-        }
-      ],
-      expectedGraph: {
-        projectConfig: graphProjectConfig,
-        graphErrors: {},
-        dataformCoreVersion: version,
-        targets: [{ schema: "defaultDataset", name: "NodesOnly", database: "defaultProject" }],
-        jitData: {},
-        propertyGraphs: [
-          {
-            target: {
-              schema: "defaultDataset",
-              name: "NodesOnly",
-              database: "defaultProject"
-            },
-            canonicalTarget: {
-              schema: "defaultDataset",
-              name: "NodesOnly",
-              database: "defaultProject"
-            },
-            fileName: "definitions/graph.yaml",
-            description: "",
-            disabled: false,
-            entities: [
-              {
-                name: "Customer",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "customers",
-                  database: "defaultProject"
-                },
-                keys: ["id"]
+                keys: ["id"],
               },
-              {
-                name: "Product",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "products",
-                  database: "defaultProject"
-                },
-                keys: ["sku"]
-              }
             ],
             graphBody:
               "NODE TABLES (\n" +
-              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id),\n" +
-              "  `defaultProject.defaultDataset.products` AS Product KEY (sku)\n" +
-              ")"
-          }
-        ]
-      }
-    },
-    {
-      testName: "targetDataset overrides the schema on the graph target",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "graph.yaml",
-          contents: `
-name: CustomDsGraph
-targetDataset:
-  datasetId: customDs
-entities:
-- name: Customer
-  dataSourceString: defaultProject.defaultDataset.customers
-  keys:
-  - id
-`
-        }
-      ],
-      expectedGraph: {
-        projectConfig: graphProjectConfig,
-        graphErrors: {},
-        dataformCoreVersion: version,
-        targets: [{ schema: "customDs", name: "CustomDsGraph", database: "defaultProject" }],
-        jitData: {},
-        propertyGraphs: [
-          {
-            target: {
-              schema: "customDs",
-              name: "CustomDsGraph",
-              database: "defaultProject"
-            },
-            canonicalTarget: {
-              schema: "customDs",
-              name: "CustomDsGraph",
-              database: "defaultProject"
-            },
-            fileName: "definitions/graph.yaml",
-            description: "",
-            disabled: false,
-            entities: [
-              {
-                name: "Customer",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "customers",
-                  database: "defaultProject"
-                },
-                keys: ["id"]
-              }
-            ],
-            graphBody:
-              "NODE TABLES (\n" +
-              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id)\n" +
-              ")"
-          }
-        ]
-      }
+              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id) PROPERTIES ALL COLUMNS\n" +
+              ")",
+          },
+        ],
+      },
     },
     {
       testName: "empty graph.yaml produces a compilation error",
@@ -323,8 +206,8 @@ entities:
       definitionFiles: [
         {
           name: "graph.yaml",
-          contents: ""
-        }
+          contents: "",
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -332,14 +215,14 @@ entities:
           compilationErrors: [
             graphError(
               "definitions/graph.yaml",
-              "Property graph config is empty or malformed. Expected a top-level " +
-                "object with 'name' and 'entities'."
-            )
-          ]
+              "Property graph config is empty or malformed. " +
+                "Expected a top-level object with 'version' and 'semantic_model'.",
+            ),
+          ],
         },
         dataformCoreVersion: version,
-        jitData: {}
-      }
+        jitData: {},
+      },
     },
     {
       testName: "graph.yaml with only a comment produces a compilation error",
@@ -347,8 +230,8 @@ entities:
       definitionFiles: [
         {
           name: "graph.yaml",
-          contents: "# nothing here\n"
-        }
+          contents: "# nothing here yet\n",
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -356,14 +239,14 @@ entities:
           compilationErrors: [
             graphError(
               "definitions/graph.yaml",
-              "Property graph config is empty or malformed. Expected a top-level " +
-                "object with 'name' and 'entities'."
-            )
-          ]
+              "Property graph config is empty or malformed. " +
+                "Expected a top-level object with 'version' and 'semantic_model'.",
+            ),
+          ],
         },
         dataformCoreVersion: version,
-        jitData: {}
-      }
+        jitData: {},
+      },
     },
     {
       testName: "graph.yaml with a top-level scalar produces a compilation error",
@@ -371,8 +254,8 @@ entities:
       definitionFiles: [
         {
           name: "graph.yaml",
-          contents: "just a string\n"
-        }
+          contents: "just a string\n",
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -380,14 +263,14 @@ entities:
           compilationErrors: [
             graphError(
               "definitions/graph.yaml",
-              "Property graph config is empty or malformed. Expected a top-level " +
-                "object with 'name' and 'entities'."
-            )
-          ]
+              "Property graph config is empty or malformed. " +
+                "Expected a top-level object with 'version' and 'semantic_model'.",
+            ),
+          ],
         },
         dataformCoreVersion: version,
-        jitData: {}
-      }
+        jitData: {},
+      },
     },
     {
       testName: "graph.yaml missing entities produces a compilation error",
@@ -396,9 +279,11 @@ entities:
         {
           name: "graph.yaml",
           contents: `
-name: EmptyGraph
-`
-        }
+version: 0.2.0.dev0/google
+semantic_model:
+- name: EmptyGraph
+`,
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -406,400 +291,180 @@ name: EmptyGraph
           compilationErrors: [
             graphError(
               "definitions/graph.yaml",
-              "Property graph 'EmptyGraph' must declare at least one entity."
-            )
-          ]
+              "Property graph 'EmptyGraph' must declare at least one entity.",
+            ),
+          ],
         },
         dataformCoreVersion: version,
-        jitData: {}
-      }
+        jitData: {},
+      },
     },
     {
-      testName: "graph with relationships emits EDGE TABLES",
+      testName: "entity source.ref resolves to a sibling sqlx table and records a dependency",
+      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
+      definitionFiles: [
+        {
+          name: "customers.sqlx",
+          contents: `config { type: "table" }\nSELECT 1 AS id`,
+        },
+        {
+          name: "graph.yaml",
+          contents: `
+version: 0.2.0.dev0/google
+semantic_model:
+- name: RefGraph
+  entities:
+  - name: Customer
+    source:
+      ref: customers
+    primary_key:
+    - id
+`,
+        },
+      ],
+      expectedPropertyGraphs: [
+        {
+          target: {
+            schema: "defaultDataset",
+            name: "RefGraph",
+            database: "defaultProject",
+          },
+          canonicalTarget: {
+            schema: "defaultDataset",
+            name: "RefGraph",
+            database: "defaultProject",
+          },
+          dependencyTargets: [
+            {
+              schema: "defaultDataset",
+              name: "customers",
+              database: "defaultProject",
+            },
+          ],
+          fileName: "definitions/graph.yaml",
+          description: "",
+          disabled: false,
+          nodes: [
+            {
+              name: "Customer",
+              dataSource: {
+                schema: "defaultDataset",
+                name: "customers",
+                database: "defaultProject",
+              },
+              keys: ["id"],
+            },
+          ],
+          graphBody:
+            "NODE TABLES (\n" +
+            "  `defaultProject.defaultDataset.customers` AS Customer KEY (id) PROPERTIES ALL COLUMNS\n" +
+            ")",
+        },
+      ],
+    },
+    {
+      testName: "downstream sqlx model can reference the property graph via ref()",
       workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
       definitionFiles: [
         {
           name: "graph.yaml",
           contents: `
-name: RelGraph
-entities:
-- name: Customer
-  dataSourceString: defaultProject.defaultDataset.customers
-  keys:
-  - id
-- name: Order
-  dataSourceString: defaultProject.defaultDataset.orders
-  keys:
-  - id
-relationships:
-- name: PlacedBy
-  dataSourceString: defaultProject.defaultDataset.orders
-  source:
-    entity: Order
-    joinKeys:
-    - order_id
-  destination:
-    entity: Customer
-    joinKeys:
-    - customer_id
-`
-        }
+version: 0.2.0.dev0/google
+semantic_model:
+- name: UniGraph
+  entities:
+  - name: Process
+    source: bigquery:defaultProject.defaultDataset.processes
+    primary_key: [process_id]
+`,
+        },
+        {
+          name: "query_graph.sqlx",
+          contents:
+            'config { type: "table" }\nSELECT * FROM GRAPH_TABLE(${ref("UniGraph")} MATCH (p:Process) COLUMNS (p.process_id))',
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
         graphErrors: {},
         dataformCoreVersion: version,
-        targets: [{ schema: "defaultDataset", name: "RelGraph", database: "defaultProject" }],
+        targets: [
+          { schema: "defaultDataset", name: "UniGraph", database: "defaultProject" },
+          { schema: "defaultDataset", name: "query_graph", database: "defaultProject" },
+        ],
         jitData: {},
+        tables: [
+          dataform.Table.create({
+            type: "table",
+            target: { schema: "defaultDataset", name: "query_graph", database: "defaultProject" },
+            canonicalTarget: {
+              schema: "defaultDataset",
+              name: "query_graph",
+              database: "defaultProject",
+            },
+            dependencyTargets: [
+              { schema: "defaultDataset", name: "UniGraph", database: "defaultProject" },
+            ],
+            query:
+              "\nSELECT * FROM GRAPH_TABLE(`defaultProject.defaultDataset.UniGraph` MATCH (p:Process) COLUMNS (p.process_id))",
+            disabled: false,
+            fileName: "definitions/query_graph.sqlx",
+            enumType: dataform.TableType.TABLE,
+            hermeticity: dataform.ActionHermeticity.NON_HERMETIC,
+          }),
+        ],
         propertyGraphs: [
           {
             target: {
               schema: "defaultDataset",
-              name: "RelGraph",
-              database: "defaultProject"
+              name: "UniGraph",
+              database: "defaultProject",
             },
             canonicalTarget: {
               schema: "defaultDataset",
-              name: "RelGraph",
-              database: "defaultProject"
+              name: "UniGraph",
+              database: "defaultProject",
             },
             fileName: "definitions/graph.yaml",
             description: "",
             disabled: false,
-            entities: [
+            nodes: [
               {
-                name: "Customer",
+                name: "Process",
                 dataSource: {
                   schema: "defaultDataset",
-                  name: "customers",
-                  database: "defaultProject"
+                  name: "processes",
+                  database: "defaultProject",
                 },
-                keys: ["id"]
+                keys: ["process_id"],
               },
-              {
-                name: "Order",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "orders",
-                  database: "defaultProject"
-                },
-                keys: ["id"]
-              }
-            ],
-            relationships: [
-              {
-                name: "PlacedBy",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "orders",
-                  database: "defaultProject"
-                },
-                source: {
-                  entity: "Order",
-                  relationshipColumns: ["order_id"],
-                  entityColumns: ["id"]
-                },
-                destination: {
-                  entity: "Customer",
-                  relationshipColumns: ["customer_id"],
-                  entityColumns: ["id"]
-                }
-              }
             ],
             graphBody:
               "NODE TABLES (\n" +
-              "  `defaultProject.defaultDataset.customers` AS Customer KEY (id),\n" +
-              "  `defaultProject.defaultDataset.orders` AS Order KEY (id)\n" +
-              ")\n" +
-              "EDGE TABLES (\n" +
-              "  `defaultProject.defaultDataset.orders` AS PlacedBy " +
-              "SOURCE KEY (order_id) REFERENCES Order (id) " +
-              "DESTINATION KEY (customer_id) REFERENCES Customer (id)\n" +
-              ")"
-          }
-        ]
-      }
+              "  `defaultProject.defaultDataset.processes` AS Process KEY (process_id) PROPERTIES ALL COLUMNS\n" +
+              ")",
+          },
+        ],
+      },
     },
     {
-      testName: "ref to declaration resolves entity dataSource and renders graphBody",
+      testName: "entity source.ref pointing to a non-existent action records a compilation error",
       workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
       definitionFiles: [
         {
-          name: "actions.yaml",
+          name: "graph.yaml",
           contents: `
-actions:
-- declaration:
-    name: books
-`
+version: 0.2.0.dev0/google
+semantic_model:
+- name: MissingRefGraph
+  entities:
+  - name: Ghost
+    source:
+      ref: does_not_exist
+    primary_key:
+    - id
+`,
         },
-        {
-          name: "graph.yaml",
-          contents: `
-name: RefGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "RefGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "RefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "defaultProject",
-              schema: "defaultDataset",
-              name: "books"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "defaultDataset",
-                name: "books",
-                database: "defaultProject"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" + "  `defaultProject.defaultDataset.books` AS Book KEY (id)\n" + ")"
-        }
-      ]
-    },
-    {
-      testName: "ref with schema override resolves the matching declaration",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "actions.yaml",
-          contents: `
-actions:
-- declaration:
-    name: books
-    dataset: alt
-- declaration:
-    name: books
-`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: RefWithSchemaGraph
-entities:
-- name: Book
-  ref:
-    name: books
-    schema: alt
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "RefWithSchemaGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "RefWithSchemaGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "defaultProject",
-              schema: "alt",
-              name: "books"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "alt",
-                name: "books",
-                database: "defaultProject"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody: "NODE TABLES (\n" + "  `defaultProject.alt.books` AS Book KEY (id)\n" + ")"
-        }
-      ]
-    },
-    {
-      testName: "ref with includeDependentAssertions pulls the dependency's assertions",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "books.sqlx",
-          contents: `config {
-  type: "table",
-  assertions: { rowConditions: ["id > 0"] }
-}
-select 1 as id`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: AssertRefGraph
-entities:
-- name: Book
-  ref:
-    name: books
-    includeDependentAssertions: true
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "AssertRefGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "AssertRefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "defaultProject",
-              schema: "defaultDataset",
-              name: "books"
-            },
-            {
-              database: "defaultProject",
-              schema: "defaultDataset",
-              name: "defaultDataset_books_assertions_rowConditions"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "defaultDataset",
-                name: "books",
-                database: "defaultProject"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" + "  `defaultProject.defaultDataset.books` AS Book KEY (id)\n" + ")"
-        }
-      ]
-    },
-    {
-      testName: "graph-level dependOnDependencyAssertions pulls every ref's assertions",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "books.sqlx",
-          contents: `config {
-  type: "table",
-  assertions: { rowConditions: ["id > 0"] }
-}
-select 1 as id`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: GraphAssertDefaultGraph
-dependOnDependencyAssertions: true
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "GraphAssertDefaultGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "GraphAssertDefaultGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "defaultProject",
-              schema: "defaultDataset",
-              name: "books"
-            },
-            {
-              database: "defaultProject",
-              schema: "defaultDataset",
-              name: "defaultDataset_books_assertions_rowConditions"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "defaultDataset",
-                name: "books",
-                database: "defaultProject"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" + "  `defaultProject.defaultDataset.books` AS Book KEY (id)\n" + ")"
-        }
-      ]
-    },
-    {
-      testName: "missing ref emits a compilation error and leaves graphBody empty",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "graph.yaml",
-          contents: `
-name: MissingRefGraph
-entities:
-- name: Book
-  ref: nonexistent
-  keys:
-  - id
-`
-        }
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -807,16 +472,13 @@ entities:
           compilationErrors: [
             graphError(
               "definitions/graph.yaml",
-              "Missing dependency detected: Action " +
-                '"defaultProject.defaultDataset.MissingRefGraph" depends on ' +
-                '"{"name":"nonexistent","includeDependentAssertions":false}" ' +
-                "which does not exist",
+              'Missing dependency detected: Action "defaultProject.defaultDataset.MissingRefGraph" depends on "{"name":"does_not_exist","includeDependentAssertions":false}" which does not exist',
               {
                 actionName: "defaultProject.defaultDataset.MissingRefGraph",
-                actionTarget: missingRefTarget
-              }
-            )
-          ]
+                actionTarget: missingRefTarget,
+              },
+            ),
+          ],
         },
         dataformCoreVersion: version,
         targets: [missingRefTarget],
@@ -828,361 +490,41 @@ entities:
             fileName: "definitions/graph.yaml",
             description: "",
             disabled: false,
-            entities: [
+            nodes: [
               {
-                name: "Book",
-                keys: ["id"]
-              }
-            ]
-          }
-        ]
-      }
+                name: "Ghost",
+                keys: ["id"],
+              },
+            ],
+          },
+        ],
+      },
     },
     {
-      testName: "ref to a table respects datasetSuffix on the resolved dependency",
-      workflowSettings: `
-defaultProject: defaultProject
-defaultDataset: defaultDataset
-defaultLocation: US
-datasetSuffix: dev
+      testName: "entity source.ref with an ambiguous action name records a compilation error",
+      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
+      definitionFiles: [
+        {
+          name: "decls.js",
+          contents: `
+declare({ schema: "one", name: "books" });
+declare({ schema: "two", name: "books" });
 `,
-      definitionFiles: [
-        {
-          name: "books.sqlx",
-          contents: `config {type: "table"}
-select 1 as id`
         },
         {
           name: "graph.yaml",
           contents: `
-name: SuffixRefGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset_dev",
-            name: "SuffixRefGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "SuffixRefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              schema: "defaultDataset_dev",
-              name: "books",
-              database: "defaultProject"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "defaultDataset_dev",
-                name: "books",
-                database: "defaultProject"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" +
-            "  `defaultProject.defaultDataset_dev.books` AS Book KEY (id)\n" +
-            ")"
-        }
-      ]
-    },
-    {
-      testName: "ref with database override resolves the matching declaration",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "actions.yaml",
-          contents: `
-actions:
-- declaration:
-    name: books
-    project: otherProject
-- declaration:
-    name: books
-`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: RefWithDatabaseGraph
-entities:
-- name: Book
-  ref:
-    name: books
-    database: otherProject
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "RefWithDatabaseGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "RefWithDatabaseGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "otherProject",
-              schema: "defaultDataset",
-              name: "books"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                database: "otherProject",
-                schema: "defaultDataset",
-                name: "books"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" + "  `otherProject.defaultDataset.books` AS Book KEY (id)\n" + ")"
-        }
-      ]
-    },
-    {
-      testName: "relationship ref resolves through the full pipeline",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "actions.yaml",
-          contents: `
-actions:
-- declaration:
-    name: wrote
-`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: RelationshipRefGraph
-entities:
-- name: Book
-  dataSourceString: defaultProject.defaultDataset.books
-  keys:
-  - id
-- name: Author
-  dataSourceString: defaultProject.defaultDataset.authors
-  keys:
-  - id
-relationships:
-- name: WrittenBy
-  ref: wrote
-  keys:
-  - author_id
-  - book_id
-  source:
-    entity: Book
-    joinKeys:
-    - book_id
-  destination:
-    entity: Author
-    joinKeys:
-    - author_id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "RelationshipRefGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "RelationshipRefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "defaultProject",
-              schema: "defaultDataset",
-              name: "wrote"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                database: "defaultProject",
-                schema: "defaultDataset",
-                name: "books"
-              },
-              keys: ["id"]
-            },
-            {
-              name: "Author",
-              dataSource: {
-                database: "defaultProject",
-                schema: "defaultDataset",
-                name: "authors"
-              },
-              keys: ["id"]
-            }
-          ],
-          relationships: [
-            {
-              name: "WrittenBy",
-              dataSource: {
-                database: "defaultProject",
-                schema: "defaultDataset",
-                name: "wrote"
-              },
-              keys: ["author_id", "book_id"],
-              source: {
-                entity: "Book",
-                relationshipColumns: ["book_id"],
-                entityColumns: ["id"]
-              },
-              destination: {
-                entity: "Author",
-                relationshipColumns: ["author_id"],
-                entityColumns: ["id"]
-              }
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" +
-            "  `defaultProject.defaultDataset.books` AS Book KEY (id),\n" +
-            "  `defaultProject.defaultDataset.authors` AS Author KEY (id)\n" +
-            ")\n" +
-            "EDGE TABLES (\n" +
-            "  `defaultProject.defaultDataset.wrote` AS WrittenBy " +
-            "KEY (author_id, book_id) " +
-            "SOURCE KEY (book_id) REFERENCES Book (id) " +
-            "DESTINATION KEY (author_id) REFERENCES Author (id)\n" +
-            ")"
-        }
-      ]
-    },
-    {
-      testName: "ref to a view resolves and picks up datasetSuffix",
-      workflowSettings: `
-defaultProject: defaultProject
-defaultDataset: defaultDataset
-defaultLocation: US
-datasetSuffix: dev
+version: 0.2.0.dev0/google
+semantic_model:
+- name: AmbiguousRefGraph
+  entities:
+  - name: Book
+    source:
+      ref: books
+    primary_key:
+    - id
 `,
-      definitionFiles: [
-        {
-          name: "books.sqlx",
-          contents: `config {type: "view"}
-select 1 as id`
         },
-        {
-          name: "graph.yaml",
-          contents: `
-name: ViewRefGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset_dev",
-            name: "ViewRefGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "ViewRefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              database: "defaultProject",
-              schema: "defaultDataset_dev",
-              name: "books"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                database: "defaultProject",
-                schema: "defaultDataset_dev",
-                name: "books"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" +
-            "  `defaultProject.defaultDataset_dev.books` AS Book KEY (id)\n" +
-            ")"
-        }
-      ]
-    },
-    {
-      testName: "ambiguous ref emits a compilation error",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "actions.yaml",
-          contents: `
-actions:
-- declaration:
-    name: books
-    dataset: one
-- declaration:
-    name: books
-    dataset: two
-`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: AmbiguousRefGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
@@ -1190,21 +532,28 @@ entities:
           compilationErrors: [
             graphError(
               "definitions/graph.yaml",
-              `Ambiguous Action name: {"name":"books","includeDependentAssertions":false}. ` +
-                "Did you mean one of: one.books, two.books.",
+              'Ambiguous Action name: {"name":"books","includeDependentAssertions":false}. Did you mean one of: one.books, two.books.',
               {
                 actionName: "defaultProject.defaultDataset.AmbiguousRefGraph",
-                actionTarget: graphTarget
-              }
-            )
-          ]
+                actionTarget: graphTarget,
+              },
+            ),
+          ],
         },
         dataformCoreVersion: version,
-        targets: [declOneTarget, declTwoTarget, graphTarget],
+        targets: [graphTarget, declOneTarget, declTwoTarget],
         jitData: {},
         declarations: [
-          { target: declOneTarget, canonicalTarget: declOneTarget },
-          { target: declTwoTarget, canonicalTarget: declTwoTarget }
+          {
+            target: declOneTarget,
+            canonicalTarget: declOneTarget,
+            fileName: "definitions/decls.js",
+          },
+          {
+            target: declTwoTarget,
+            canonicalTarget: declTwoTarget,
+            fileName: "definitions/decls.js",
+          },
         ],
         propertyGraphs: [
           {
@@ -1213,386 +562,557 @@ entities:
             fileName: "definitions/graph.yaml",
             description: "",
             disabled: false,
-            entities: [{ name: "Book", keys: ["id"] }]
-          }
-        ]
-      }
-    },
-    {
-      testName: "ref to a table respects projectSuffix on the resolved dependency",
-      workflowSettings: `
-defaultProject: defaultProject
-defaultDataset: defaultDataset
-defaultLocation: US
-projectSuffix: dev
-`,
-      definitionFiles: [
-        {
-          name: "books.sqlx",
-          contents: `config {type: "table"}
-select 1 as id`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: ProjectSuffixRefGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "ProjectSuffixRefGraph",
-            database: "defaultProject_dev"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "ProjectSuffixRefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              schema: "defaultDataset",
-              name: "books",
-              database: "defaultProject_dev"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "defaultDataset",
-                name: "books",
-                database: "defaultProject_dev"
+            nodes: [
+              {
+                name: "Book",
+                keys: ["id"],
               },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" +
-            "  `defaultProject_dev.defaultDataset.books` AS Book KEY (id)\n" +
-            ")"
-        }
-      ]
+            ],
+          },
+        ],
+      },
     },
     {
-      testName: "ref to a table respects namePrefix on the resolved dependency",
-      workflowSettings: `
-defaultProject: defaultProject
-defaultDataset: defaultDataset
-defaultLocation: US
-namePrefix: pfx
-`,
-      definitionFiles: [
-        {
-          name: "books.sqlx",
-          contents: `config {type: "table"}
-select 1 as id`
-        },
-        {
-          name: "graph.yaml",
-          contents: `
-name: NamePrefixRefGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-`
-        }
-      ],
-      expectedPropertyGraphs: [
-        {
-          target: {
-            schema: "defaultDataset",
-            name: "pfx_NamePrefixRefGraph",
-            database: "defaultProject"
-          },
-          canonicalTarget: {
-            schema: "defaultDataset",
-            name: "NamePrefixRefGraph",
-            database: "defaultProject"
-          },
-          dependencyTargets: [
-            {
-              schema: "defaultDataset",
-              name: "pfx_books",
-              database: "defaultProject"
-            }
-          ],
-          fileName: "definitions/graph.yaml",
-          description: "",
-          disabled: false,
-          entities: [
-            {
-              name: "Book",
-              dataSource: {
-                schema: "defaultDataset",
-                name: "pfx_books",
-                database: "defaultProject"
-              },
-              keys: ["id"]
-            }
-          ],
-          graphBody:
-            "NODE TABLES (\n" +
-            "  `defaultProject.defaultDataset.pfx_books` AS Book KEY (id)\n" +
-            ")"
-        }
-      ]
-    },
-    {
-      testName: "graph target colliding with a table target is flagged as duplicate",
+      testName: "property graph colliding with a table target records a duplicate-target error",
       workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
       definitionFiles: [
         {
-          name: "collision.sqlx",
-          contents: `config {type: "table", name: "CollisionName"}
-select 1 as a`
+          name: "CollisionName.sqlx",
+          contents: `config { type: "table" }\nSELECT 1 AS id`,
         },
         {
           name: "graph.yaml",
           contents: `
-name: CollisionName
-entities:
-- name: Customer
-  dataSourceString: defaultProject.defaultDataset.customers
-  keys:
-  - id
-`
-        }
+version: 0.2.0.dev0/google
+semantic_model:
+- name: CollisionName
+  entities:
+  - name: Book
+    source: bigquery:defaultProject.defaultDataset.books
+    primary_key:
+    - id
+`,
+        },
       ],
       expectedGraph: {
         projectConfig: graphProjectConfig,
         graphErrors: {
           compilationErrors: [
-            graphError("definitions/collision.sqlx", duplicateActionMessage, {
+            graphError("definitions/CollisionName.sqlx", duplicateActionMessage, {
               actionName: collisionActionName,
-              actionTarget: collisionTarget
+              actionTarget: collisionTarget,
             }),
-            graphError("definitions/collision.sqlx", duplicateCanonicalMessage, {
+            graphError("definitions/CollisionName.sqlx", duplicateCanonicalMessage, {
               actionName: collisionActionName,
-              actionTarget: collisionTarget
+              actionTarget: collisionTarget,
             }),
             graphError("definitions/graph.yaml", duplicateActionMessage, {
               actionName: collisionActionName,
-              actionTarget: collisionTarget
+              actionTarget: collisionTarget,
             }),
             graphError("definitions/graph.yaml", duplicateCanonicalMessage, {
               actionName: collisionActionName,
-              actionTarget: collisionTarget
-            })
-          ]
+              actionTarget: collisionTarget,
+            }),
+          ],
         },
         dataformCoreVersion: version,
         targets: [collisionTarget, collisionTarget],
-        jitData: {}
-      }
-    },
-    {
-      testName: "graph.yaml accepts snake_case keys per BQ spec",
-      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
-      definitionFiles: [
-        {
-          name: "graph.yaml",
-          contents: `
-name: SnakeGraph
-description: end to end snake case
-target_dataset:
-  project_id: defaultProject
-  dataset_id: defaultDataset
-entities:
-- name: Account
-  data_source_string: defaultProject.defaultDataset.accounts
-  keys:
-  - id
-  fields:
-    import_all: true
-    except:
-    - secret
-relationships:
-- name: Owns
-  data_source_string: defaultProject.defaultDataset.ownership
-  source:
-    entity: Account
-    join_keys:
-      relationship_columns:
-      - owner_id
-  destination:
-    entity: Account
-    join_keys:
-      relationship_columns:
-      - owned_id
-`
-        }
-      ],
-      expectedGraph: {
-        projectConfig: graphProjectConfig,
-        graphErrors: {},
-        dataformCoreVersion: version,
-        targets: [{ schema: "defaultDataset", name: "SnakeGraph", database: "defaultProject" }],
         jitData: {},
-        propertyGraphs: [
-          {
-            target: {
-              schema: "defaultDataset",
-              name: "SnakeGraph",
-              database: "defaultProject"
-            },
-            canonicalTarget: {
-              schema: "defaultDataset",
-              name: "SnakeGraph",
-              database: "defaultProject"
-            },
-            fileName: "definitions/graph.yaml",
-            description: "end to end snake case",
-            disabled: false,
-            entities: [
-              {
-                name: "Account",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "accounts",
-                  database: "defaultProject"
-                },
-                keys: ["id"],
-                labels: [
-                  {
-                    name: "Account",
-                    description: "",
-                    importAll: true,
-                    importExcept: ["secret"],
-                    isDefault: true
-                  }
-                ]
-              }
-            ],
-            relationships: [
-              {
-                name: "Owns",
-                dataSource: {
-                  schema: "defaultDataset",
-                  name: "ownership",
-                  database: "defaultProject"
-                },
-                source: {
-                  entity: "Account",
-                  relationshipColumns: ["owner_id"],
-                  entityColumns: ["id"]
-                },
-                destination: {
-                  entity: "Account",
-                  relationshipColumns: ["owned_id"],
-                  entityColumns: ["id"]
-                }
-              }
-            ],
-            graphBody:
-              "NODE TABLES (\n" +
-              "  `defaultProject.defaultDataset.accounts` AS Account KEY (id) " +
-              "DEFAULT LABEL PROPERTIES ARE ALL COLUMNS EXCEPT (secret)\n" +
-              ")\n" +
-              "EDGE TABLES (\n" +
-              "  `defaultProject.defaultDataset.ownership` AS Owns " +
-              "SOURCE KEY (owner_id) REFERENCES Account (id) " +
-              "DESTINATION KEY (owned_id) REFERENCES Account (id)\n" +
-              ")"
-          }
-        ]
-      }
+      },
     },
     {
-      testName: "mixed ref and dataSourceString: only ref target appears in dependencyTargets",
+      testName:
+        "graph.yaml accepts Semantic Ontology V1 snake_case keys, deployments, foreign-key relationships, and metrics",
       workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
       definitionFiles: [
         {
           name: "books.sqlx",
-          contents: `config {type: "table"}
-select 1 as id`
+          contents: `config { type: "table", assertions: { nonNull: ["id"] } }\nSELECT 1 AS id, 10 AS publisher_id`,
         },
         {
           name: "authors.sqlx",
-          contents: `config {type: "table"}
-select 1 as id`
+          contents: `config { type: "table", assertions: { nonNull: ["id"] } }\nSELECT 1 AS id`,
+        },
+        {
+          name: "wrote.sqlx",
+          contents: `config { type: "table" }\nSELECT 1 AS author_id, 1 AS book_id`,
         },
         {
           name: "graph.yaml",
           contents: `
-name: MixedRefStringGraph
-entities:
-- name: Book
-  ref: books
-  keys:
-  - id
-- name: Author
-  dataSourceString: defaultProject.defaultDataset.authors
-  keys:
-  - id
-`
-        }
+version: 0.2.0.dev0/google
+depend_on_dependency_assertions: false
+semantic_model:
+- name: SnakeGraph
+  deployments:
+  - name: default
+    target: bigquery.googleapis.com/projects/customProj/datasets/customDs/propertyGraphs/SnakeGraph
+  entities:
+  - name: Book
+    source:
+      ref:
+        name: books
+        include_dependent_assertions: true
+    primary_key:
+    - id
+    fields:
+    - name: id
+      datatype: INT64
+  - name: Author
+    source:
+      ref: authors
+    primary_key:
+    - id
+  - name: Authorship
+    source:
+      ref: wrote
+    primary_key: [author_id, book_id]
+  relationships:
+  - name: Wrote
+    from: Authorship
+    to: Author
+    from_columns: [author_id]
+    to_columns: [id]
+  - name: WrittenByPrimaryAuthor
+    from: Book
+    to: Author
+    from_columns: [publisher_id]
+    to_columns: [id]
+  metrics:
+  - name: book_count
+    entity: Book
+    expression: COUNT(id)
+`,
+        },
       ],
       expectedPropertyGraphs: [
         {
           target: {
-            schema: "defaultDataset",
-            name: "MixedRefStringGraph",
-            database: "defaultProject"
+            schema: "customDs",
+            name: "SnakeGraph",
+            database: "customProj",
           },
           canonicalTarget: {
-            schema: "defaultDataset",
-            name: "MixedRefStringGraph",
-            database: "defaultProject"
+            schema: "customDs",
+            name: "SnakeGraph",
+            database: "customProj",
           },
           dependencyTargets: [
-            { database: "defaultProject", schema: "defaultDataset", name: "books" }
+            {
+              schema: "defaultDataset",
+              name: "books",
+              database: "defaultProject",
+            },
+            {
+              schema: "defaultDataset",
+              name: "defaultDataset_books_assertions_rowConditions",
+              database: "defaultProject",
+            },
+            {
+              schema: "defaultDataset",
+              name: "authors",
+              database: "defaultProject",
+            },
+            {
+              schema: "defaultDataset",
+              name: "wrote",
+              database: "defaultProject",
+            },
           ],
           fileName: "definitions/graph.yaml",
           description: "",
           disabled: false,
-          entities: [
+          nodes: [
             {
               name: "Book",
               dataSource: {
                 schema: "defaultDataset",
                 name: "books",
-                database: "defaultProject"
+                database: "defaultProject",
               },
-              keys: ["id"]
+              keys: ["id"],
+              labels: [
+                {
+                  name: "Book",
+                  fields: [
+                    { name: "id", expression: "id", description: "" },
+                    { name: "book_count", expression: "MEASURE(COUNT(id))", description: "" },
+                  ],
+                  importAll: false,
+                  isDefault: true,
+                },
+              ],
             },
             {
               name: "Author",
               dataSource: {
                 schema: "defaultDataset",
                 name: "authors",
-                database: "defaultProject"
+                database: "defaultProject",
               },
-              keys: ["id"]
-            }
+              keys: ["id"],
+            },
+            {
+              name: "Authorship",
+              dataSource: {
+                schema: "defaultDataset",
+                name: "wrote",
+                database: "defaultProject",
+              },
+              keys: ["author_id", "book_id"],
+            },
+          ],
+          edges: [
+            {
+              name: "Wrote",
+              dataSource: {
+                schema: "defaultDataset",
+                name: "wrote",
+                database: "defaultProject",
+              },
+              keys: ["author_id", "book_id"],
+              source: {
+                node: "Authorship",
+                edgeColumns: ["author_id", "book_id"],
+                nodeColumns: ["author_id", "book_id"],
+              },
+              destination: {
+                node: "Author",
+                edgeColumns: ["author_id"],
+                nodeColumns: ["id"],
+              },
+            },
+            {
+              name: "WrittenByPrimaryAuthor",
+              dataSource: {
+                schema: "defaultDataset",
+                name: "books",
+                database: "defaultProject",
+              },
+              keys: ["id"],
+              source: {
+                node: "Book",
+                edgeColumns: ["id"],
+                nodeColumns: ["id"],
+              },
+              destination: {
+                node: "Author",
+                edgeColumns: ["publisher_id"],
+                nodeColumns: ["id"],
+              },
+            },
           ],
           graphBody:
             "NODE TABLES (\n" +
-            "  `defaultProject.defaultDataset.books` AS Book KEY (id),\n" +
-            "  `defaultProject.defaultDataset.authors` AS Author KEY (id)\n" +
-            ")"
-        }
-      ]
-    }
+            "  `defaultProject.defaultDataset.books` AS Book KEY (id) PROPERTIES (id, MEASURE(COUNT(id)) AS book_count),\n" +
+            "  `defaultProject.defaultDataset.authors` AS Author KEY (id) PROPERTIES ALL COLUMNS,\n" +
+            "  `defaultProject.defaultDataset.wrote` AS Authorship KEY (author_id, book_id) PROPERTIES ALL COLUMNS\n" +
+            ")\n" +
+            "EDGE TABLES (\n" +
+            "  `defaultProject.defaultDataset.wrote` AS Wrote KEY (author_id, book_id) " +
+            "SOURCE KEY (author_id, book_id) REFERENCES Authorship (author_id, book_id) " +
+            "DESTINATION KEY (author_id) REFERENCES Author (id) NO PROPERTIES,\n" +
+            "  `defaultProject.defaultDataset.books` AS WrittenByPrimaryAuthor KEY (id) " +
+            "SOURCE KEY (id) REFERENCES Book (id) " +
+            "DESTINATION KEY (publisher_id) REFERENCES Author (id) NO PROPERTIES\n" +
+            ")",
+        },
+      ],
+    },
+    {
+      testName: "graph.yaml job_labels and defaultJobLabels merge and preserve snake_case keys",
+      workflowSettings: `
+defaultProject: defaultProject
+defaultDataset: defaultDataset
+defaultLocation: US
+defaultJobLabels:
+  env: dev
+  team_name: graph_team
+`,
+      definitionFiles: [
+        {
+          name: "graph.yaml",
+          contents: `
+version: 0.2.0.dev0/google
+job_labels:
+  env: prod
+  cost_center: finance
+semantic_model:
+- name: LabeledGraph
+  entities:
+  - name: Customer
+    source: bigquery:defaultProject.defaultDataset.customers
+    primary_key:
+    - id
+`,
+        },
+      ],
+      expectedPropertyGraphs: [
+        {
+          target: {
+            schema: "defaultDataset",
+            name: "LabeledGraph",
+            database: "defaultProject",
+          },
+          canonicalTarget: {
+            schema: "defaultDataset",
+            name: "LabeledGraph",
+            database: "defaultProject",
+          },
+          fileName: "definitions/graph.yaml",
+          description: "",
+          disabled: false,
+          actionDescriptor: {
+            jobLabels: {
+              env: "prod",
+              team_name: "graph_team",
+              cost_center: "finance",
+            },
+          },
+          nodes: [
+            {
+              name: "Customer",
+              dataSource: {
+                schema: "defaultDataset",
+                name: "customers",
+                database: "defaultProject",
+              },
+              keys: ["id"],
+            },
+          ],
+          graphBody:
+            "NODE TABLES (\n" +
+            "  `defaultProject.defaultDataset.customers` AS Customer KEY (id) PROPERTIES ALL COLUMNS\n" +
+            ")",
+        },
+      ],
+    },
+    {
+      testName: "ref with schema and database overrides resolves the matching declaration",
+      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
+      definitionFiles: [
+        {
+          name: "actions.yaml",
+          contents: `
+actions:
+- declaration:
+    name: books
+    dataset: alt
+    project: otherProject
+- declaration:
+    name: books
+`,
+        },
+        {
+          name: "graph.yaml",
+          contents: `
+version: 0.2.0.dev0/google
+semantic_model:
+- name: RefWithOverridesGraph
+  entities:
+  - name: Book
+    source:
+      ref:
+        name: books
+        schema: alt
+        database: otherProject
+    primary_key:
+    - id
+`,
+        },
+      ],
+      expectedPropertyGraphs: [
+        {
+          target: {
+            schema: "defaultDataset",
+            name: "RefWithOverridesGraph",
+            database: "defaultProject",
+          },
+          canonicalTarget: {
+            schema: "defaultDataset",
+            name: "RefWithOverridesGraph",
+            database: "defaultProject",
+          },
+          dependencyTargets: [
+            {
+              database: "otherProject",
+              schema: "alt",
+              name: "books",
+            },
+          ],
+          fileName: "definitions/graph.yaml",
+          description: "",
+          disabled: false,
+          nodes: [
+            {
+              name: "Book",
+              dataSource: {
+                schema: "alt",
+                name: "books",
+                database: "otherProject",
+              },
+              keys: ["id"],
+            },
+          ],
+          graphBody:
+            "NODE TABLES (\n" +
+            "  `otherProject.alt.books` AS Book KEY (id) PROPERTIES ALL COLUMNS\n" +
+            ")",
+        },
+      ],
+    },
+    {
+      testName: "graph-level dependOnDependencyAssertions pulls every ref's assertions",
+      workflowSettings: VALID_WORKFLOW_SETTINGS_YAML,
+      definitionFiles: [
+        {
+          name: "books.sqlx",
+          contents: `config {
+  type: "table",
+  assertions: { rowConditions: ["id > 0"] }
+}
+select 1 as id`,
+        },
+        {
+          name: "graph.yaml",
+          contents: `
+version: 0.2.0.dev0/google
+dependOnDependencyAssertions: true
+semantic_model:
+- name: GraphAssertDefaultGraph
+  entities:
+  - name: Book
+    source:
+      ref: books
+    primary_key:
+    - id
+`,
+        },
+      ],
+      expectedPropertyGraphs: [
+        {
+          target: {
+            schema: "defaultDataset",
+            name: "GraphAssertDefaultGraph",
+            database: "defaultProject",
+          },
+          canonicalTarget: {
+            schema: "defaultDataset",
+            name: "GraphAssertDefaultGraph",
+            database: "defaultProject",
+          },
+          dependencyTargets: [
+            {
+              database: "defaultProject",
+              schema: "defaultDataset",
+              name: "books",
+            },
+            {
+              database: "defaultProject",
+              schema: "defaultDataset",
+              name: "defaultDataset_books_assertions_rowConditions",
+            },
+          ],
+          fileName: "definitions/graph.yaml",
+          description: "",
+          disabled: false,
+          nodes: [
+            {
+              name: "Book",
+              dataSource: {
+                schema: "defaultDataset",
+                name: "books",
+                database: "defaultProject",
+              },
+              keys: ["id"],
+            },
+          ],
+          graphBody:
+            "NODE TABLES (\n" +
+            "  `defaultProject.defaultDataset.books` AS Book KEY (id) PROPERTIES ALL COLUMNS\n" +
+            ")",
+        },
+      ],
+    },
+    {
+      testName: "ref to a table respects datasetSuffix, projectSuffix, and namePrefix",
+      workflowSettings: `
+defaultProject: defaultProject
+defaultDataset: defaultDataset
+defaultLocation: US
+datasetSuffix: dev
+projectSuffix: stg
+namePrefix: pfx
+`,
+      definitionFiles: [
+        {
+          name: "books.sqlx",
+          contents: `config {type: "table"}
+select 1 as id`,
+        },
+        {
+          name: "graph.yaml",
+          contents: `
+version: 0.2.0.dev0/google
+semantic_model:
+- name: SuffixRefGraph
+  entities:
+  - name: Book
+    source:
+      ref: books
+    primary_key:
+    - id
+`,
+        },
+      ],
+      expectedPropertyGraphs: [
+        {
+          target: {
+            schema: "defaultDataset_dev",
+            name: "pfx_SuffixRefGraph",
+            database: "defaultProject_stg",
+          },
+          canonicalTarget: {
+            schema: "defaultDataset",
+            name: "SuffixRefGraph",
+            database: "defaultProject",
+          },
+          dependencyTargets: [
+            {
+              schema: "defaultDataset_dev",
+              name: "pfx_books",
+              database: "defaultProject_stg",
+            },
+          ],
+          fileName: "definitions/graph.yaml",
+          description: "",
+          disabled: false,
+          nodes: [
+            {
+              name: "Book",
+              dataSource: {
+                schema: "defaultDataset_dev",
+                name: "pfx_books",
+                database: "defaultProject_stg",
+              },
+              keys: ["id"],
+            },
+          ],
+          graphBody:
+            "NODE TABLES (\n" +
+            "  `defaultProject_stg.defaultDataset_dev.pfx_books` AS Book KEY (id) PROPERTIES ALL COLUMNS\n" +
+            ")",
+        },
+      ],
+    },
   ];
-  
-  testCases.forEach(testParameters => {
+
+  testCases.forEach((testParameters) => {
     test(testParameters.testName, () => {
       const projectDir = tmpDirFixture.createNewTmpDir();
       writeWorkflowSettingsFile(projectDir, testParameters.workflowSettings);
-      testParameters.definitionFiles.forEach(file => {
+      testParameters.definitionFiles.forEach((file) => {
         writeDefinitionFile(projectDir, file.name, file.contents);
       });
 
@@ -1600,19 +1120,19 @@ entities:
 
       if (!testParameters.expectedGraph && !testParameters.expectedPropertyGraphs) {
         throw new Error(
-          `Test case "${testParameters.testName}" must specify either expectedGraph or expectedPropertyGraphs`
+          `Test case "${testParameters.testName}" must specify either expectedGraph or expectedPropertyGraphs`,
         );
       }
 
       if (testParameters.expectedGraph) {
-        expect(asPlainObject(result.compile?.compiledGraph)).deep.equals(
-          asPlainObject(testParameters.expectedGraph)
+        expect(asPlainGraph(result.compile?.compiledGraph)).deep.equals(
+          asPlainObject(testParameters.expectedGraph),
         );
       }
       if (testParameters.expectedPropertyGraphs) {
         expect(result.compile?.compiledGraph?.graphErrors?.compilationErrors).deep.equals([]);
         expect(asPlainObject(result.compile?.compiledGraph?.propertyGraphs)).deep.equals(
-          asPlainObject(testParameters.expectedPropertyGraphs)
+          asPlainObject(testParameters.expectedPropertyGraphs),
         );
       }
     });
@@ -1622,12 +1142,14 @@ entities:
     const projectDir = tmpDirFixture.createNewTmpDir();
     writeWorkflowSettingsFile(projectDir, VALID_WORKFLOW_SETTINGS_YAML);
     const graphBody = `
-name: MultiGraph
-entities:
-- name: Node
-  dataSourceString: defaultProject.defaultDataset.t
-  keys:
-  - id
+version: 0.2.0.dev0/google
+semantic_model:
+- name: MultiGraph
+  entities:
+  - name: Node
+    source: bigquery:defaultProject.defaultDataset.t
+    primary_key:
+    - id
 `;
     writeDefinitionFile(projectDir, "graph.yaml", graphBody);
     writeDefinitionFile(projectDir, "subdir/graph.yaml", graphBody);
@@ -1639,15 +1161,15 @@ entities:
           filePaths: [
             "workflow_settings.yaml",
             "definitions/graph.yaml",
-            "definitions/subdir/graph.yaml"
-          ]
-        }
-      }
+            "definitions/subdir/graph.yaml",
+          ],
+        },
+      },
     });
 
     const result = runMainInVm(request);
 
-    expect(asPlainObject(result.compile?.compiledGraph)).deep.equals(
+    expect(asPlainGraph(result.compile?.compiledGraph)).deep.equals(
       asPlainObject({
         projectConfig: graphProjectConfig,
         graphErrors: {
@@ -1656,13 +1178,13 @@ entities:
               "definitions/graph.yaml",
               "At most one graph.yaml is allowed per project (found 2: " +
                 "definitions/graph.yaml, definitions/subdir/graph.yaml). This " +
-                "restriction may be relaxed in a future version."
-            )
-          ]
+                "restriction may be relaxed in a future version.",
+            ),
+          ],
         },
         dataformCoreVersion: version,
-        jitData: {}
-      })
+        jitData: {},
+      }),
     );
   });
 });

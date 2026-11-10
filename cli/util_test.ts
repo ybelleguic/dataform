@@ -1,43 +1,55 @@
 import { expect } from "chai";
+import Long from "long";
 
 import {
   formatBytesInHumanReadableFormat,
+  formatDatasetWarehouseState,
   formatExecutionSuffix,
   validateIcebergConfigBucketName,
   validateIcebergConfigTableFolderRoot,
   validateIcebergConfigTableFolderSubpath,
+  warnAboutSetDatasetIdWithoutLocation,
 } from "df/cli/util";
+import { dataform } from "df/protos/ts";
 import { suite, test } from "df/testing";
 
-suite('format execution suffix', () => {
-    test('format execution suffix', () => {
-        expect(formatExecutionSuffix([], [])).deep.equals('');
-        expect(formatExecutionSuffix(["dataform-915a03fe1"], [])).deep.equals(" \n \t jobId: dataform-915a03fe1");
-        expect(formatExecutionSuffix([], ["10 MiB"])).deep.equals(" \n \t Bytes billed: 10 MiB");
-        expect(formatExecutionSuffix(["dataform-915a03fe1"], ["17 KiB"])).deep.equals(" \n \t jobId: dataform-915a03fe1,\n \t Bytes billed: 17 KiB");
-        expect(formatExecutionSuffix(["dataform-915a03fe1", "dataform-915a03fe2"], ["17 KiB", "1 GiB"])).deep.equals(" \n \t jobId: dataform-915a03fe1, dataform-915a03fe2,\n \t Bytes billed: 17 KiB, 1 GiB");
-    });
+suite("format execution suffix", () => {
+  test("format execution suffix", () => {
+    expect(formatExecutionSuffix([], [])).deep.equals("");
+    expect(formatExecutionSuffix(["dataform-915a03fe1"], [])).deep.equals(
+      " \n \t jobId: dataform-915a03fe1",
+    );
+    expect(formatExecutionSuffix([], ["10 MiB"])).deep.equals(" \n \t Bytes billed: 10 MiB");
+    expect(formatExecutionSuffix(["dataform-915a03fe1"], ["17 KiB"])).deep.equals(
+      " \n \t jobId: dataform-915a03fe1,\n \t Bytes billed: 17 KiB",
+    );
+    expect(
+      formatExecutionSuffix(["dataform-915a03fe1", "dataform-915a03fe2"], ["17 KiB", "1 GiB"]),
+    ).deep.equals(
+      " \n \t jobId: dataform-915a03fe1, dataform-915a03fe2,\n \t Bytes billed: 17 KiB, 1 GiB",
+    );
+  });
 });
 
-suite('format bytes in human readable format', () => {
-    test('format bytes in human readable format', () => {
-        expect(formatBytesInHumanReadableFormat(-1)).deep.equals('0 B');
-        expect(formatBytesInHumanReadableFormat(0)).deep.equals('0 B');
-        expect(formatBytesInHumanReadableFormat(1)).deep.equals('1.00 B');
-        expect(formatBytesInHumanReadableFormat(500)).deep.equals('500.00 B');
-        expect(formatBytesInHumanReadableFormat(1024)).deep.equals('1.00 KiB');
-        expect(formatBytesInHumanReadableFormat(1500)).deep.equals('1.46 KiB');
-        expect(formatBytesInHumanReadableFormat(1048576)).deep.equals('1.00 MiB');
-        expect(formatBytesInHumanReadableFormat(1024 * 1024 * 1.5)).deep.equals('1.50 MiB');
-        expect(formatBytesInHumanReadableFormat(1073741824)).deep.equals('1.00 GiB');
-        expect(formatBytesInHumanReadableFormat(1099511627776)).deep.equals('1.00 TiB');
-        expect(formatBytesInHumanReadableFormat(1125899906842624)).deep.equals('1.00 PiB');
-    });
+suite("format bytes in human readable format", () => {
+  test("format bytes in human readable format", () => {
+    expect(formatBytesInHumanReadableFormat(-1)).deep.equals("0 B");
+    expect(formatBytesInHumanReadableFormat(0)).deep.equals("0 B");
+    expect(formatBytesInHumanReadableFormat(1)).deep.equals("1.00 B");
+    expect(formatBytesInHumanReadableFormat(500)).deep.equals("500.00 B");
+    expect(formatBytesInHumanReadableFormat(1024)).deep.equals("1.00 KiB");
+    expect(formatBytesInHumanReadableFormat(1500)).deep.equals("1.46 KiB");
+    expect(formatBytesInHumanReadableFormat(1048576)).deep.equals("1.00 MiB");
+    expect(formatBytesInHumanReadableFormat(1024 * 1024 * 1.5)).deep.equals("1.50 MiB");
+    expect(formatBytesInHumanReadableFormat(1073741824)).deep.equals("1.00 GiB");
+    expect(formatBytesInHumanReadableFormat(1099511627776)).deep.equals("1.00 TiB");
+    expect(formatBytesInHumanReadableFormat(1125899906842624)).deep.equals("1.00 PiB");
+  });
 });
 
-suite('Iceberg Config Validation', () => {
-  suite('validateIcebergConfigBucketName', () => {
-    test('valid bucket names do not throw errors', () => {
+suite("Iceberg Config Validation", () => {
+  suite("validateIcebergConfigBucketName", () => {
+    test("valid bucket names do not throw errors", () => {
       expect(() => validateIcebergConfigBucketName("my-bucket")).to.not.throw();
       expect(() => validateIcebergConfigBucketName("a.b_c-d123")).to.not.throw();
       expect(() => validateIcebergConfigBucketName("bucket123")).to.not.throw();
@@ -45,18 +57,18 @@ suite('Iceberg Config Validation', () => {
       expect(() => validateIcebergConfigBucketName("aaa")).to.not.throw();
     });
 
-    test('invalidates bucket names with uppercase letters', () => {
+    test("invalidates bucket names with uppercase letters", () => {
       expect(() => validateIcebergConfigBucketName("MyBucket")).to.throw("Invalid bucket name.");
       expect(() => validateIcebergConfigBucketName("mY-bucket")).to.throw("Invalid bucket name.");
     });
 
-    test('invalidates bucket names with invalid characters', () => {
+    test("invalidates bucket names with invalid characters", () => {
       expect(() => validateIcebergConfigBucketName("bucket!")).to.throw("Invalid bucket name.");
       expect(() => validateIcebergConfigBucketName("bucket//")).to.throw("Invalid bucket name.");
       expect(() => validateIcebergConfigBucketName("bucket?")).to.throw("Invalid bucket name.");
     });
 
-    test('invalidates bucket names starting or ending with disallowed characters', () => {
+    test("invalidates bucket names starting or ending with disallowed characters", () => {
       expect(() => validateIcebergConfigBucketName(".bucket")).to.throw("Invalid bucket name.");
       expect(() => validateIcebergConfigBucketName("bucket.")).to.throw("Invalid bucket name.");
       expect(() => validateIcebergConfigBucketName("-bucket")).to.throw("Invalid bucket name.");
@@ -70,27 +82,41 @@ suite('Iceberg Config Validation', () => {
     });
 
     test('invalidates bucket names starting with "goog"', () => {
-      expect(() => validateIcebergConfigBucketName("goog-bucket")).to.throw("Bucket name cannot start with 'goog' or contain '--'.");
-      expect(() => validateIcebergConfigBucketName("googlebucket")).to.throw("Bucket name cannot start with 'goog' or contain '--'.");
+      expect(() => validateIcebergConfigBucketName("goog-bucket")).to.throw(
+        "Bucket name cannot start with 'goog' or contain '--'.",
+      );
+      expect(() => validateIcebergConfigBucketName("googlebucket")).to.throw(
+        "Bucket name cannot start with 'goog' or contain '--'.",
+      );
     });
 
     test('invalidates bucket names containing "--"', () => {
-      expect(() => validateIcebergConfigBucketName("buck--et")).to.throw("Bucket name cannot start with 'goog' or contain '--'.");
+      expect(() => validateIcebergConfigBucketName("buck--et")).to.throw(
+        "Bucket name cannot start with 'goog' or contain '--'.",
+      );
     });
 
     test('invalidates bucket names containing "google" or "g00gle"', () => {
-      expect(() => validateIcebergConfigBucketName("bucket-google")).to.throw("Bucket name cannot contain 'google' or close misspellings such as 'g00gle'.");
-      expect(() => validateIcebergConfigBucketName("g00glebucket")).to.throw("Bucket name cannot contain 'google' or close misspellings such as 'g00gle'.");
+      expect(() => validateIcebergConfigBucketName("bucket-google")).to.throw(
+        "Bucket name cannot contain 'google' or close misspellings such as 'g00gle'.",
+      );
+      expect(() => validateIcebergConfigBucketName("g00glebucket")).to.throw(
+        "Bucket name cannot contain 'google' or close misspellings such as 'g00gle'.",
+      );
     });
 
-    test('invalidates bucket names that are under 3 or over 63 characters', () => {
-      expect(() => validateIcebergConfigBucketName("aa")).to.throw("Bucket name must be between 3 and 63 characters long.");
-      expect(() => validateIcebergConfigBucketName("a".repeat(64))).to.throw("Bucket name must be between 3 and 63 characters long.");
+    test("invalidates bucket names that are under 3 or over 63 characters", () => {
+      expect(() => validateIcebergConfigBucketName("aa")).to.throw(
+        "Bucket name must be between 3 and 63 characters long.",
+      );
+      expect(() => validateIcebergConfigBucketName("a".repeat(64))).to.throw(
+        "Bucket name must be between 3 and 63 characters long.",
+      );
     });
   });
 
-  suite('validateIcebergConfigTableFolderRoot', () => {
-    test('valid table folder roots do not throw errors', () => {
+  suite("validateIcebergConfigTableFolderRoot", () => {
+    test("valid table folder roots do not throw errors", () => {
       expect(() => validateIcebergConfigTableFolderRoot("my-root")).to.not.throw();
       expect(() => validateIcebergConfigTableFolderRoot("a.b_c-d123")).to.not.throw();
       expect(() => validateIcebergConfigTableFolderRoot("root123")).to.not.throw();
@@ -98,13 +124,13 @@ suite('Iceberg Config Validation', () => {
       expect(() => validateIcebergConfigTableFolderRoot("MyRoot")).to.not.throw();
     });
 
-    test('invalidates roots with invalid characters', () => {
+    test("invalidates roots with invalid characters", () => {
       expect(() => validateIcebergConfigTableFolderRoot("root!")).to.throw("Invalid input.");
       expect(() => validateIcebergConfigTableFolderRoot("root/")).to.throw("Invalid input.");
       expect(() => validateIcebergConfigTableFolderRoot("root\\")).to.throw("Invalid input.");
     });
 
-    test('invalidates roots starting or ending with disallowed characters', () => {
+    test("invalidates roots starting or ending with disallowed characters", () => {
       expect(() => validateIcebergConfigTableFolderRoot(".root")).to.throw("Invalid input.");
       expect(() => validateIcebergConfigTableFolderRoot("root.")).to.throw("Invalid input.");
       expect(() => validateIcebergConfigTableFolderRoot("-root")).to.throw("Invalid input.");
@@ -118,8 +144,8 @@ suite('Iceberg Config Validation', () => {
     });
   });
 
-  suite('validateIcebergConfigTableFolderSubpath', () => {
-    test('valid table folder subpaths do not throw errors', () => {
+  suite("validateIcebergConfigTableFolderSubpath", () => {
+    test("valid table folder subpaths do not throw errors", () => {
       expect(() => validateIcebergConfigTableFolderSubpath("my-subpath")).to.not.throw();
       expect(() => validateIcebergConfigTableFolderSubpath("a.b_c-d123")).to.not.throw();
       expect(() => validateIcebergConfigTableFolderSubpath("path/to/data")).to.not.throw();
@@ -127,7 +153,7 @@ suite('Iceberg Config Validation', () => {
       expect(() => validateIcebergConfigTableFolderSubpath("MySubpath")).to.not.throw();
     });
 
-    test('invalidates subpaths with invalid characters (not allowed)', () => {
+    test("invalidates subpaths with invalid characters (not allowed)", () => {
       expect(() => validateIcebergConfigTableFolderSubpath("subpath!")).to.throw("Invalid input.");
       expect(() => validateIcebergConfigTableFolderSubpath("subpath?")).to.throw("Invalid input.");
       expect(() => validateIcebergConfigTableFolderSubpath("sub\\path")).to.throw("Invalid input.");
@@ -136,11 +162,141 @@ suite('Iceberg Config Validation', () => {
     });
 
     test('invalidates subpaths containing "./" or "../"', () => {
-      expect(() => validateIcebergConfigTableFolderSubpath("subp./ath")).to.throw("Input cannot contain './' or '../'.");
+      expect(() => validateIcebergConfigTableFolderSubpath("subp./ath")).to.throw(
+        "Input cannot contain './' or '../'.",
+      );
     });
 
     test('invalidates subpaths containing ".."', () => {
       expect(() => validateIcebergConfigTableFolderSubpath("subp..ath")).to.throw("Invalid input.");
     });
+  });
+});
+
+suite("formatDatasetWarehouseState", () => {
+  const timestampMillis = Long.fromNumber(Date.UTC(2026, 10, 4, 14, 8, 23));
+
+  test("returns does not exist when metadata is missing", () => {
+    expect(formatDatasetWarehouseState("table", undefined)).equals("(does not exist)");
+  });
+
+  test("formats last modified date when types match", () => {
+    expect(
+      formatDatasetWarehouseState("table", {
+        type: dataform.TableMetadata.Type.TABLE,
+        lastUpdatedMillis: timestampMillis,
+      }),
+    ).equals("(last modified: 2026-11-04 14:08:23 UTC)");
+
+    expect(
+      formatDatasetWarehouseState("incremental", {
+        type: dataform.TableMetadata.Type.TABLE,
+        lastUpdatedMillis: timestampMillis,
+      }),
+    ).equals("(last modified: 2026-11-04 14:08:23 UTC)");
+
+    expect(
+      formatDatasetWarehouseState("view", {
+        type: dataform.TableMetadata.Type.VIEW,
+        lastUpdatedMillis: timestampMillis,
+      }),
+    ).equals("(last modified: 2026-11-04 14:08:23 UTC)");
+  });
+
+  test("includes old and new types when warehouse type differs from action type", () => {
+    expect(
+      formatDatasetWarehouseState("view", {
+        type: dataform.TableMetadata.Type.TABLE,
+        lastUpdatedMillis: timestampMillis,
+      }),
+    ).equals("(type: table -> view, last modified: 2026-11-04 14:08:23 UTC)");
+
+    expect(
+      formatDatasetWarehouseState("table", {
+        type: dataform.TableMetadata.Type.VIEW,
+        lastUpdatedMillis: timestampMillis,
+      }),
+    ).equals("(type: view -> table, last modified: 2026-11-04 14:08:23 UTC)");
+
+    expect(
+      formatDatasetWarehouseState("incremental", {
+        type: dataform.TableMetadata.Type.VIEW,
+        lastUpdatedMillis: timestampMillis,
+      }),
+    ).equals("(type: view -> table, last modified: 2026-11-04 14:08:23 UTC)");
+  });
+});
+
+suite("warnAboutSetDatasetIdWithoutLocation", ({ beforeEach, afterEach }) => {
+  const originalStderrWrite = process.stderr.write;
+  let stderrOutput: string[];
+
+  beforeEach("capture stderr", () => {
+    stderrOutput = [];
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrOutput.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+  });
+
+  afterEach("restore stderr", () => {
+    process.stderr.write = originalStderrWrite;
+  });
+
+  test("warns once when SET @@dataset_id is used without any location", () => {
+    warnAboutSetDatasetIdWithoutLocation(
+      [
+        {
+          target: { database: "db", schema: "schema", name: "first" },
+          tasks: [{ statement: "SET @@dataset_id = 'some_dataset';\nSELECT 1 AS id" }],
+        },
+        {
+          target: { database: "db", schema: "schema", name: "unaffected" },
+          tasks: [{ statement: "SELECT 1 AS id" }],
+        },
+        {
+          target: { database: "db", schema: "schema", name: "second" },
+          tasks: [{ statement: "SET @@dataset_id = 'some_dataset';\nSELECT 2 AS id" }],
+        },
+      ],
+      undefined,
+    );
+
+    expect(stderrOutput).to.have.length(1);
+    expect(stderrOutput[0]).to.include(
+      "Warning: SET @@dataset_id is used without a configured location.",
+    );
+    expect(stderrOutput[0]).to.include("Affected actions: db.schema.first, db.schema.second\n");
+  });
+
+  test("truncates affected actions list when more than 5 actions are affected", () => {
+    warnAboutSetDatasetIdWithoutLocation(
+      [1, 2, 3, 4, 5, 6, 7].map((i) => ({
+        target: { schema: "schema", name: `action_${i}` },
+        tasks: [{ statement: "SET @@dataset_id = 'some_dataset';\nSELECT 1 AS id" }],
+      })),
+      undefined,
+    );
+
+    expect(stderrOutput).to.have.length(1);
+    expect(stderrOutput[0]).to.include(
+      "Affected actions: schema.action_1, schema.action_2, schema.action_3, schema.action_4, " +
+        "schema.action_5 (...2 actions truncated)\n",
+    );
+  });
+
+  test("does not warn when location is set", () => {
+    warnAboutSetDatasetIdWithoutLocation(
+      [{ tasks: [{ statement: "SET @@dataset_id = 'some_dataset';\nSELECT 1 AS id" }] }],
+      "EU",
+    );
+
+    expect(stderrOutput).deep.equals([]);
+  });
+
+  test("does not warn when location is unset and SET @@dataset_id is not present in actions", () => {
+    warnAboutSetDatasetIdWithoutLocation([{ tasks: [{ statement: "SELECT 1 AS id" }] }], undefined);
+
+    expect(stderrOutput).deep.equals([]);
   });
 });

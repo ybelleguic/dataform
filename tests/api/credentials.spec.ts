@@ -16,7 +16,7 @@ suite("@dataform/api/credentials", ({ afterEach }) => {
     const credentialsPath = path.join(projectDir, "credentials.json");
     fs.writeFileSync(credentialsPath, "");
     expect(() => credentials.read(credentialsPath)).to.throw(
-      /Error reading credentials file: Unexpected end of JSON input/
+      /Error reading credentials file: Unexpected end of JSON input/,
     );
   });
 
@@ -25,7 +25,137 @@ suite("@dataform/api/credentials", ({ afterEach }) => {
     const credentialsPath = path.join(projectDir, "credentials.json");
     fs.writeFileSync(credentialsPath, "{}");
     expect(() => credentials.read(credentialsPath)).to.throw(
-      /Error reading credentials file: the projectId field is required/
+      /Error reading credentials file: the projectId field is required/,
+    );
+  });
+
+  test("bigquery credentials file without key (ADC)", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        location: "US",
+      }),
+    );
+    const parsed = credentials.read(credentialsPath);
+    expect(parsed.projectId).to.equal("my-gcp-project");
+    expect(parsed.location).to.equal("US");
+    expect(parsed.credentials).to.equal("");
+    expect(parsed.universeDomain).to.equal("");
+  });
+
+  test("bigquery credentials file with service account key", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    const keyJson = JSON.stringify({
+      type: "service_account",
+      client_email: "sa@my-gcp-project.iam.gserviceaccount.com",
+      private_key: "fake-private-key",
+    });
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        location: "EU",
+        credentials: keyJson,
+      }),
+    );
+    const parsed = credentials.read(credentialsPath);
+    expect(parsed.projectId).to.equal("my-gcp-project");
+    expect(parsed.location).to.equal("EU");
+    expect(parsed.credentials).to.equal(keyJson);
+  });
+
+  test("bigquery credentials file with a service account to impersonate", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        location: "US",
+        impersonateServiceAccount: "sa@my-gcp-project.iam.gserviceaccount.com",
+      }),
+    );
+    const parsed = credentials.read(credentialsPath);
+    expect(parsed.projectId).to.equal("my-gcp-project");
+    expect(parsed.impersonateServiceAccount).to.equal("sa@my-gcp-project.iam.gserviceaccount.com");
+    expect(parsed.credentials).to.equal("");
+    expect(parsed.universeDomain).to.equal("");
+  });
+
+  test("bigquery credentials file with a universe domain and impersonation", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        location: "US",
+        universeDomain: "s3nsapis.fr",
+        impersonateServiceAccount: "sa@my-gcp-project.iam.gserviceaccount.com",
+      }),
+    );
+    const parsed = credentials.read(credentialsPath);
+    expect(parsed.projectId).to.equal("my-gcp-project");
+    expect(parsed.location).to.equal("US");
+    expect(parsed.universeDomain).to.equal("s3nsapis.fr");
+    expect(parsed.impersonateServiceAccount).to.equal("sa@my-gcp-project.iam.gserviceaccount.com");
+  });
+
+  test("bigquery credentials file whose universeDomain matches the service account key", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    const keyJson = JSON.stringify({
+      type: "service_account",
+      universe_domain: "s3nsapis.fr",
+    });
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        universeDomain: "s3nsapis.fr",
+        credentials: keyJson,
+      }),
+    );
+    const parsed = credentials.read(credentialsPath);
+    expect(parsed.universeDomain).to.equal("s3nsapis.fr");
+    expect(parsed.credentials).to.equal(keyJson);
+  });
+
+  test("bigquery credentials reject a universeDomain that disagrees with the key", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        universeDomain: "s3nsapis.fr",
+        credentials: JSON.stringify({
+          type: "service_account",
+          universe_domain: "googleapis.com",
+        }),
+      }),
+    );
+    expect(() => credentials.read(credentialsPath)).to.throw(
+      /universeDomain "s3nsapis.fr" does not match universe_domain "googleapis.com"/,
+    );
+  });
+
+  test("bigquery credentials file with an unknown field", () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    const credentialsPath = path.join(projectDir, "credentials.json");
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        projectId: "my-gcp-project",
+        unknownProperty: "some-value",
+      }),
+    );
+    expect(() => credentials.read(credentialsPath)).to.throw(
+      /Unexpected property "unknownProperty"/,
     );
   });
 });

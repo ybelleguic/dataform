@@ -2,7 +2,7 @@ import {
   decode64,
   encode64,
   verifyObjectMatchesProto,
-  VerifyProtoErrorBehaviour
+  VerifyProtoErrorBehaviour,
 } from "df/common/protos";
 import { Assertion } from "df/core/actions/assertion";
 import { DataPreparation } from "df/core/actions/data_preparation";
@@ -16,7 +16,7 @@ import { View } from "df/core/actions/view";
 import { IDataformExtension } from "df/core/extension";
 import * as Path from "df/core/path";
 import { Session } from "df/core/session";
-import { nativeRequire, snakeToCamelKeys } from "df/core/utils";
+import { nativeRequire, snakeToCamelKeys, validateJobLabels } from "df/core/utils";
 import { readWorkflowSettings } from "df/core/workflow_settings";
 import { dataform } from "df/protos/ts";
 
@@ -38,6 +38,11 @@ export function main(coreExecutionRequest: Uint8Array | string): Uint8Array | st
     request = dataform.CoreExecutionRequest.decode(coreExecutionRequest);
   }
   const compileRequest = request.compile;
+  if (compileRequest?.compileConfig?.filePaths) {
+    compileRequest.compileConfig.filePaths = compileRequest.compileConfig.filePaths.map(
+      Path.toPosixPath,
+    );
+  }
 
   // Allow extensions to populate settings by themselves.
   const failIfMissing = !compileRequest?.compileConfig?.extension?.compilationMode;
@@ -45,11 +50,18 @@ export function main(coreExecutionRequest: Uint8Array | string): Uint8Array | st
   let projectConfig = readWorkflowSettings(failIfMissing);
 
   // Merge in project config overrides.
+  // Like `vars`, `defaultJobLabels` is merged key-by-key so overrides add to or replace
+  // individual default keys without wiping the remaining defaults from workflow_settings.yaml.
   const projectConfigOverride = compileRequest.compileConfig.projectConfigOverride ?? {};
+  const defaultJobLabels = validateJobLabels(
+    { ...projectConfig.defaultJobLabels, ...projectConfigOverride.defaultJobLabels },
+    "defaultJobLabels",
+  );
   projectConfig = dataform.ProjectConfig.create({
     ...projectConfig,
     ...projectConfigOverride,
-    vars: { ...projectConfig.vars, ...projectConfigOverride.vars }
+    vars: { ...projectConfig.vars, ...projectConfigOverride.vars },
+    defaultJobLabels,
   });
 
   // Initialize the compilation session.
@@ -64,7 +76,7 @@ export function main(coreExecutionRequest: Uint8Array | string): Uint8Array | st
   mainCompile(compileRequest, session);
 
   const coreExecutionResponse = dataform.CoreExecutionResponse.create({
-    compile: { compiledGraph: session.compile() }
+    compile: { compiledGraph: session.compile() },
   });
 
   if (typeof coreExecutionRequest === "string") {
@@ -86,7 +98,7 @@ export function main(coreExecutionRequest: Uint8Array | string): Uint8Array | st
 function actionConfigFilenameIsInvalidSqlx(
   session: Session,
   actionConfig: dataform.ActionConfig,
-  actionConfigsPath: string
+  actionConfigsPath: string,
 ): boolean {
   const filenamesByActionType: Array<[string, string | null | undefined]> = [
     ["table", actionConfig.table?.filename],
@@ -96,7 +108,7 @@ function actionConfigFilenameIsInvalidSqlx(
     ["operation", actionConfig.operation?.filename],
     ["declaration", actionConfig.declaration?.filename],
     ["notebook", actionConfig.notebook?.filename],
-    ["dataPreparation", actionConfig.dataPreparation?.filename]
+    ["dataPreparation", actionConfig.dataPreparation?.filename],
   ];
   for (const [actionType, filename] of filenamesByActionType) {
     if (filename && filename.toLowerCase().endsWith(".sqlx")) {
@@ -106,9 +118,9 @@ function actionConfigFilenameIsInvalidSqlx(
             `files cannot be referenced from actions.yaml. .sqlx files are ` +
             `compiled directly from the definitions/ directory. Either use a ` +
             `.sql file with the same contents, or remove the actions.yaml ` +
-            `entry and let Dataform pick up the .sqlx file automatically.`
+            `entry and let Dataform pick up the .sqlx file automatically.`,
         ),
-        actionConfigsPath
+        actionConfigsPath,
       );
       return true;
     }
@@ -119,15 +131,15 @@ function actionConfigFilenameIsInvalidSqlx(
 function loadActionConfigs(session: Session, filePaths: string[]) {
   filePaths
     .filter(
-      path =>
+      (path) =>
         path.startsWith(`definitions${Path.separator}`) &&
         Path.basename(path) === "actions" &&
-        Path.fileExtension(path) === "yaml"
+        Path.fileExtension(path) === "yaml",
     )
     .sort()
-    .forEach(actionConfigsPath => {
+    .forEach((actionConfigsPath) => {
       const actionConfigs = loadActionConfigsFile(session, actionConfigsPath);
-      actionConfigs.actions.forEach(nonProtoActionConfig => {
+      actionConfigs.actions.forEach((nonProtoActionConfig) => {
         const actionConfig = dataform.ActionConfig.create(nonProtoActionConfig);
 
         if (actionConfigFilenameIsInvalidSqlx(session, actionConfig, actionConfigsPath)) {
@@ -139,63 +151,63 @@ function loadActionConfigs(session: Session, filePaths: string[]) {
             new Table(
               session,
               dataform.ActionConfig.TableConfig.create(actionConfig.table),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else if (actionConfig.view) {
           session.actions.push(
             new View(
               session,
               dataform.ActionConfig.ViewConfig.create(actionConfig.view),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else if (actionConfig.incrementalTable) {
           session.actions.push(
             new IncrementalTable(
               session,
               dataform.ActionConfig.IncrementalTableConfig.create(actionConfig.incrementalTable),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else if (actionConfig.assertion) {
           session.actions.push(
             new Assertion(
               session,
               dataform.ActionConfig.AssertionConfig.create(actionConfig.assertion),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else if (actionConfig.operation) {
           session.actions.push(
             new Operation(
               session,
               dataform.ActionConfig.OperationConfig.create(actionConfig.operation),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else if (actionConfig.declaration) {
           session.actions.push(
             new Declaration(
               session,
-              dataform.ActionConfig.DeclarationConfig.create(actionConfig.declaration)
-            )
+              dataform.ActionConfig.DeclarationConfig.create(actionConfig.declaration),
+            ),
           );
         } else if (actionConfig.notebook) {
           session.actions.push(
             new Notebook(
               session,
               dataform.ActionConfig.NotebookConfig.create(actionConfig.notebook),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else if (actionConfig.dataPreparation) {
           session.actions.push(
             new DataPreparation(
               session,
               dataform.ActionConfig.DataPreparationConfig.create(actionConfig.dataPreparation),
-              actionConfigsPath
-            )
+              actionConfigsPath,
+            ),
           );
         } else {
           throw Error("Empty action configs are not permitted.");
@@ -206,7 +218,7 @@ function loadActionConfigs(session: Session, filePaths: string[]) {
 
 function loadActionConfigsFile(
   session: Session,
-  actionConfigsPath: string
+  actionConfigsPath: string,
 ): dataform.ActionConfigs {
   let actionConfigsAsJson = {};
   try {
@@ -217,7 +229,7 @@ function loadActionConfigsFile(
   verifyObjectMatchesProto(
     dataform.ActionConfigs,
     actionConfigsAsJson,
-    VerifyProtoErrorBehaviour.SHOW_DOCS_LINK
+    VerifyProtoErrorBehaviour.SHOW_DOCS_LINK,
   );
   return dataform.ActionConfigs.fromObject(actionConfigsAsJson);
 }
@@ -228,10 +240,10 @@ function loadActionConfigsFile(
 function loadPropertyGraphs(session: Session, filePaths: string[]) {
   const graphPaths = filePaths
     .filter(
-      path =>
+      (path) =>
         path.startsWith(`definitions${Path.separator}`) &&
         Path.basename(path) === "graph" &&
-        Path.fileExtension(path) === "yaml"
+        Path.fileExtension(path) === "yaml",
     )
     .sort();
   if (graphPaths.length === 0) {
@@ -242,16 +254,16 @@ function loadPropertyGraphs(session: Session, filePaths: string[]) {
       new Error(
         `At most one graph.yaml is allowed per project (found ${graphPaths.length}: ` +
           `${graphPaths.join(", ")}). This restriction may be relaxed in a future ` +
-          `version.`
+          `version.`,
       ),
-      graphPaths[0]
+      graphPaths[0],
     );
     return;
   }
   const graphPath = graphPaths[0];
   let configAsJson: any;
   try {
-    configAsJson = snakeToCamelKeys(nativeRequire(graphPath).asJson);
+    configAsJson = snakeToCamelKeys(nativeRequire(graphPath).asJson, new Set(["jobLabels"]));
   } catch (e) {
     session.compileError(e, graphPath);
     return;
@@ -260,9 +272,9 @@ function loadPropertyGraphs(session: Session, filePaths: string[]) {
     session.compileError(
       new Error(
         "Property graph config is empty or malformed. " +
-          "Expected a top-level object with 'name' and 'entities'."
+          "Expected a top-level object with 'version' and 'semantic_model'.",
       ),
-      graphPath
+      graphPath,
     );
     return;
   }
@@ -274,13 +286,19 @@ function loadPropertyGraphs(session: Session, filePaths: string[]) {
 }
 
 function prologueCompile(compileRequest: dataform.ICompileExecutionRequest, session: Session) {
-  if (compileRequest?.compileConfig?.extension?.compilationMode === dataform.ExtensionCompilationMode.PROLOGUE) {
+  if (
+    compileRequest?.compileConfig?.extension?.compilationMode ===
+    dataform.ExtensionCompilationMode.PROLOGUE
+  ) {
     extensionCompile(compileRequest, session);
   }
 }
 
 function mainCompile(compileRequest: dataform.ICompileExecutionRequest, session: Session) {
-  if (compileRequest?.compileConfig?.extension?.compilationMode === dataform.ExtensionCompilationMode.APPLICATION_CODE) {
+  if (
+    compileRequest?.compileConfig?.extension?.compilationMode ===
+    dataform.ExtensionCompilationMode.APPLICATION_CODE
+  ) {
     extensionCompile(compileRequest, session);
     return;
   }
@@ -306,10 +324,10 @@ function dataformCompile(compileRequest: dataform.ICompileExecutionRequest, sess
   // "includes" files from implicitly depending on other "includes" files.
   const topLevelIncludes: { [key: string]: any } = {};
   compileRequest.compileConfig.filePaths
-    .filter(path => path.startsWith(`includes${Path.separator}`))
-    .filter(path => path.split(Path.separator).length === 2) // Only include top-level "includes" files.
-    .filter(path => Path.fileExtension(path) === "js")
-    .forEach(includePath => {
+    .filter((path) => path.startsWith(`includes${Path.separator}`))
+    .filter((path) => path.split(Path.separator).length === 2) // Only include top-level "includes" files.
+    .filter((path) => Path.fileExtension(path) === "js")
+    .forEach((includePath) => {
       try {
         topLevelIncludes[Path.basename(includePath)] = nativeRequire(includePath);
       } catch (e) {
@@ -327,16 +345,16 @@ function dataformCompile(compileRequest: dataform.ICompileExecutionRequest, sess
   globalAny.test = session.test.bind(session);
   globalAny.jitData = session.jitData.bind(session);
   globalAny.getContents = session.getContents.bind(session);
-  
+
   loadActionConfigs(session, compileRequest.compileConfig.filePaths);
   loadPropertyGraphs(session, compileRequest.compileConfig.filePaths);
 
   // Require all "definitions" files (attaching them to the session).
   compileRequest.compileConfig.filePaths
-    .filter(path => path.startsWith(`definitions${Path.separator}`))
-    .filter(path => Path.fileExtension(path) === "js" || Path.fileExtension(path) === "sqlx")
+    .filter((path) => path.startsWith(`definitions${Path.separator}`))
+    .filter((path) => Path.fileExtension(path) === "js" || Path.fileExtension(path) === "sqlx")
     .sort()
-    .forEach(definitionPath => {
+    .forEach((definitionPath) => {
       try {
         nativeRequire(definitionPath);
       } catch (e) {

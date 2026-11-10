@@ -2,17 +2,14 @@ import * as fs from "fs";
 import * as path from "path";
 import untildify from "untildify";
 
-import {
-  interactiveQuestion,
-  print,
-  printError,
-  printSuccess,
-} from "df/cli/console";
-import {validateConnectionFormat} from "df/core/utils"
+import { setsDatasetId } from "df/cli/api/utils/query_transforms";
+import { interactiveQuestion, print, printError, printSuccess, printWarning } from "df/cli/console";
+import { targetAsReadableString } from "df/core/targets";
+import { validateConnectionFormat } from "df/core/utils";
 import { dataform } from "df/protos/ts";
 
 export function actuallyResolve(...filePaths: string[]) {
-  return path.resolve(...filePaths.map(filePath => untildify(filePath)));
+  return path.resolve(...filePaths.map((filePath) => untildify(filePath)));
 }
 
 export function assertPathExists(checkPath: string) {
@@ -39,9 +36,11 @@ export function formatExecutionSuffix(jobIds: string[], bytesBilled: string[]): 
 export function formatBytesInHumanReadableFormat(bytes: number): string {
   // we do not want to raise an error when bytes < 0
   // because it will fail Dataform run command when in fact the BQ job was executed.
-  if (bytes <= 0) {return '0 B';}
+  if (bytes <= 0) {
+    return "0 B";
+  }
 
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   const k = 1024;
 
   // Find the appropriate unit level
@@ -50,6 +49,35 @@ export function formatBytesInHumanReadableFormat(bytes: number): string {
   const value = (bytes / Math.pow(k, i)).toFixed(2);
 
   return `${value} ${units[i]}`;
+}
+
+export function formatDatasetWarehouseState(
+  datasetType: string,
+  tableMetadata?: dataform.ITableMetadata,
+): string {
+  if (!tableMetadata) {
+    return "(does not exist)";
+  }
+  const details: string[] = [];
+  const oldBaseType =
+    tableMetadata.type === dataform.TableMetadata.Type.VIEW
+      ? "view"
+      : tableMetadata.type === dataform.TableMetadata.Type.TABLE
+        ? "table"
+        : undefined;
+  const newBaseType = datasetType === "view" ? "view" : "table";
+  if (oldBaseType && oldBaseType !== newBaseType) {
+    details.push(`type: ${oldBaseType} -> ${newBaseType}`);
+  }
+  const lastUpdatedMillis = tableMetadata.lastUpdatedMillis?.toNumber?.() ?? 0;
+  if (lastUpdatedMillis !== 0) {
+    const lastModified = new Date(lastUpdatedMillis)
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d{3}Z$/, " UTC");
+    details.push(`last modified: ${lastModified}`);
+  }
+  return `(${details.join(", ")})`;
 }
 
 /**
@@ -71,7 +99,7 @@ export function promptForIcebergConfig(): dataform.IDefaultIcebergConfig | undef
     print(ICEBERG_BUCKET_NAME_HINT);
     bucketName = interactiveQuestion(ICEBERG_BUCKET_NAME_PROMPT_QUESTION);
     try {
-      if(bucketName) {
+      if (bucketName) {
         validateIcebergConfigBucketName(bucketName);
         tempIcebergConfig.bucketName = bucketName;
       }
@@ -100,7 +128,7 @@ export function promptForIcebergConfig(): dataform.IDefaultIcebergConfig | undef
 
   let tableFolderSubpath: string;
   while (true) {
-    print(ICEBERG_TABLE_FOLDER_ROOT_SUBPATH_HINT)
+    print(ICEBERG_TABLE_FOLDER_ROOT_SUBPATH_HINT);
     tableFolderSubpath = interactiveQuestion(ICEBERG_TABLE_FOLDER_SUBPATH_PROMPT_QUESTION);
     try {
       if (tableFolderSubpath) {
@@ -116,7 +144,7 @@ export function promptForIcebergConfig(): dataform.IDefaultIcebergConfig | undef
 
   let connection: string;
   while (true) {
-    print(ICEBERG_CONNECTION_HINT)
+    print(ICEBERG_CONNECTION_HINT);
     connection = interactiveQuestion(ICEBERG_CONNECTION_QUESTION);
     try {
       if (connection) {
@@ -159,13 +187,13 @@ export function validateIcebergConfigBucketName(bucketName: string): void {
   }
   if (!/^[a-z0-9][a-z0-9-._]{1,220}[a-z0-9]$/.test(bucketName) || bucketName.includes("..")) {
     throw new Error(
-      "Invalid bucket name. Must start and end with a letter or number, contain only lowercase letters, numbers, hyphens (-), underscores (_), and periods (.)."
+      "Invalid bucket name. Must start and end with a letter or number, contain only lowercase letters, numbers, hyphens (-), underscores (_), and periods (.).",
     );
   }
   if (bucketName.startsWith("goog") || bucketName.includes("--")) {
     throw new Error("Bucket name cannot start with 'goog' or contain '--'.");
   }
-  if(bucketName.includes("google") || bucketName.includes("g00gle")) {
+  if (bucketName.includes("google") || bucketName.includes("g00gle")) {
     throw new Error("Bucket name cannot contain 'google' or close misspellings such as 'g00gle'.");
   }
 }
@@ -181,9 +209,12 @@ export function validateIcebergConfigBucketName(bucketName: string): void {
  *     -   Cannot contain the sequence "..".
  */
 export function validateIcebergConfigTableFolderRoot(tableFolderRoot: string): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9-._]{1,220}[a-zA-Z0-9]$/.test(tableFolderRoot) || tableFolderRoot.includes("..")) {
+  if (
+    !/^[a-zA-Z0-9][a-zA-Z0-9-._]{1,220}[a-zA-Z0-9]$/.test(tableFolderRoot) ||
+    tableFolderRoot.includes("..")
+  ) {
     throw new Error(
-      "Invalid input. Must start and end with a letter or number, contain only letters (a-z, A-Z), numbers, hyphens (-), underscores (_), and periods (.)."
+      "Invalid input. Must start and end with a letter or number, contain only letters (a-z, A-Z), numbers, hyphens (-), underscores (_), and periods (.).",
     );
   }
 }
@@ -200,9 +231,12 @@ export function validateIcebergConfigTableFolderRoot(tableFolderRoot: string): v
  *     -   Cannot contain "../".
  */
 export function validateIcebergConfigTableFolderSubpath(tableFolderSubpath: string): void {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9-._/]{1,220}[a-zA-Z0-9]$/.test(tableFolderSubpath) || tableFolderSubpath.includes("..")) {
+  if (
+    !/^[a-zA-Z0-9][a-zA-Z0-9-._/]{1,220}[a-zA-Z0-9]$/.test(tableFolderSubpath) ||
+    tableFolderSubpath.includes("..")
+  ) {
     throw new Error(
-      "Invalid input. Must start and end with a letter or number, contain only letters (a-z, A-Z), numbers, hyphens (-), underscores (_), periods (.), and forward slashes (/). The sequence '..' is also disallowed."
+      "Invalid input. Must start and end with a letter or number, contain only letters (a-z, A-Z), numbers, hyphens (-), underscores (_), periods (.), and forward slashes (/). The sequence '..' is also disallowed.",
     );
   }
   if (tableFolderSubpath.includes("./") || tableFolderSubpath.includes("../")) {
@@ -210,14 +244,51 @@ export function validateIcebergConfigTableFolderSubpath(tableFolderSubpath: stri
   }
 }
 
-export const ICEBERG_BUCKET_NAME_HINT = "The bucket name must comply with https://cloud.google.com/storage/docs/buckets#naming. If you do not want to provide a workflow-level default bucket name, leave this input empty.\n";
-export const ICEBERG_TABLE_FOLDER_ROOT_HINT = "Table folder root must start and end with a letter or a number. It can only contain letters, numbers, hyphens, underscores and periods. If you do not want to provide a workflow_level default table folder root, leave this input empty.\n"
-export const ICEBERG_TABLE_FOLDER_ROOT_SUBPATH_HINT = "Table folder subpath must start and end with a letter or a number. It can only contain letters, numbers, hyphens, underscores, periods and forward slashes. If you do not want to provide a workflow_level default table folder subpath, leave this input empty.\n"
-export const ICEBERG_CONFIG_PROMPT_HINT = "Set repository-level configuration for Iceberg bucket name, table folder root,  table folder subpath and connection. If you do not want to set a field, enter an empty string in response to the prompt.\n";
-export const ICEBERG_CONFIG_PROMPT_TEXT = "\n--- Iceberg Configuration ---\n"
+const MAX_SET_DATASET_ID_AFFECTED_ACTIONS = 5;
+
+export function warnAboutSetDatasetIdWithoutLocation(
+  actions: dataform.IExecutionAction[],
+  location: string | undefined,
+) {
+  if (location) {
+    return;
+  }
+  const affectedActions = actions.filter((a) =>
+    a.tasks?.some((t) => setsDatasetId(t.statement || "")),
+  );
+  if (affectedActions.length === 0) {
+    return;
+  }
+  const listedTargets = affectedActions
+    .slice(0, MAX_SET_DATASET_ID_AFFECTED_ACTIONS)
+    .map((a) => (a.target ? targetAsReadableString(a.target) : ""))
+    .join(", ");
+  const truncatedCount = affectedActions.length - MAX_SET_DATASET_ID_AFFECTED_ACTIONS;
+  const truncatedSuffix = truncatedCount > 0 ? ` (...${truncatedCount} actions truncated)` : "";
+  printWarning(
+    "Warning: SET @@dataset_id is used without a configured location. BigQuery does not infer the query " +
+      "or new dataset location from @@dataset_id for unqualified table names, so queries may run in (and create " +
+      "datasets in) the default US location. Set a default location (defaultLocation) in workflow_settings.yaml " +
+      "(or by passing the --default-location option) or qualify source table names.\n" +
+      `Affected actions: ${listedTargets}${truncatedSuffix}\n`,
+  );
+}
+
+export const ICEBERG_BUCKET_NAME_HINT =
+  "The bucket name must comply with https://cloud.google.com/storage/docs/buckets#naming. If you do not want to provide a workflow-level default bucket name, leave this input empty.\n";
+export const ICEBERG_TABLE_FOLDER_ROOT_HINT =
+  "Table folder root must start and end with a letter or a number. It can only contain letters, numbers, hyphens, underscores and periods. If you do not want to provide a workflow_level default table folder root, leave this input empty.\n";
+export const ICEBERG_TABLE_FOLDER_ROOT_SUBPATH_HINT =
+  "Table folder subpath must start and end with a letter or a number. It can only contain letters, numbers, hyphens, underscores, periods and forward slashes. If you do not want to provide a workflow_level default table folder subpath, leave this input empty.\n";
+export const ICEBERG_CONFIG_PROMPT_HINT =
+  "Set repository-level configuration for Iceberg bucket name, table folder root,  table folder subpath and connection. If you do not want to set a field, enter an empty string in response to the prompt.\n";
+export const ICEBERG_CONFIG_PROMPT_TEXT = "\n--- Iceberg Configuration ---\n";
 export const ICEBERG_CONFIG_COLLECTED_TEXT = "Iceberg configuration collected.\n";
 export const ICEBERG_BUCKET_NAME_PROMPT_QUESTION = "Enter the default Iceberg bucket name:";
-export const ICEBERG_TABLE_FOLDER_ROOT_PROMPT_QUESTION = "Enter the default Iceberg table folder root:";
-export const ICEBERG_TABLE_FOLDER_SUBPATH_PROMPT_QUESTION = "Enter the default Iceberg table folder subpath:";
-export const ICEBERG_CONNECTION_HINT = "The connection can have the form `{project}.{location}.{connection_id}` or `projects/{project}/locations/{location}/connections/{connection_id} or be set to DEFAULT. If you do not want to provide a workflow-level default connection, leave this input empty.\n";
+export const ICEBERG_TABLE_FOLDER_ROOT_PROMPT_QUESTION =
+  "Enter the default Iceberg table folder root:";
+export const ICEBERG_TABLE_FOLDER_SUBPATH_PROMPT_QUESTION =
+  "Enter the default Iceberg table folder subpath:";
+export const ICEBERG_CONNECTION_HINT =
+  "The connection can have the form `{project}.{location}.{connection_id}` or `projects/{project}/locations/{location}/connections/{connection_id} or be set to DEFAULT. If you do not want to provide a workflow-level default connection, leave this input empty.\n";
 export const ICEBERG_CONNECTION_QUESTION = "Enter the default connection:";

@@ -4,30 +4,27 @@ import {
   CREDENTIALS_PATH,
   INTEGRATION_TEST_PROJECT,
   runCli,
-  setupJitProject
+  setupJitProject,
 } from "df/cli/index_test_base";
-import { suite, test, writeDefinitionFile } from "df/testing";
+import { test, writeDefinitionFile } from "df/testing";
+import { integrationSuite } from "df/testing/credentials";
 import { TmpDirFixture } from "df/testing/fixtures";
 
-suite("JiT support dependencies", ({ afterEach }) => {
+integrationSuite("JiT support dependencies", ({ afterEach }) => {
   const tmpDirFixture = new TmpDirFixture(afterEach);
 
   test("JiT transitive dependency pruning", async () => {
     const projectDir = tmpDirFixture.createNewTmpDir();
     await setupJitProject(tmpDirFixture, projectDir);
     // A (AoT) -> B (JiT)
-    writeDefinitionFile(
-      projectDir,
-      "table_a.sqlx",
-      "config { type: 'table' } SELECT 1 as val"
-    );
+    writeDefinitionFile(projectDir, "table_a.sqlx", "config { type: 'table' } SELECT 1 as val");
     writeDefinitionFile(
       projectDir,
       "table_b.js",
       `publish("table_b", { type: "table", dependencies: ["table_a"] }).jitCode(async (jctx) => {
         const upstream = jctx.ref("table_a");
         return "SELECT '" + upstream + "' as ref_name";
-      })`
+      })`,
     );
 
     const runResult = await runCli("run", [
@@ -37,7 +34,7 @@ suite("JiT support dependencies", ({ afterEach }) => {
       "--dry-run",
       "--json",
       "--actions=table_b",
-      "--include-deps"
+      "--include-deps",
     ]);
 
     expect(runResult.exitCode).equals(0);
@@ -47,7 +44,9 @@ suite("JiT support dependencies", ({ afterEach }) => {
     expect(executedGraph.actions.some((a: any) => a.target.name === "table_a")).to.equal(true);
     const actionB = executedGraph.actions.find((a: any) => a.target.name === "table_b");
     expect(actionB).to.not.equal(undefined);
-    expect(actionB.tasks[0].compiledSql).to.include(`SELECT '\`${INTEGRATION_TEST_PROJECT}.dataform.table_a\`' as ref_name`);
+    expect(actionB.tasks[0].compiledSql).to.include(
+      `SELECT '\`${INTEGRATION_TEST_PROJECT}.dataform.table_a\`' as ref_name`,
+    );
   });
 
   test("JiT to JiT dependency chain", async () => {
@@ -57,15 +56,15 @@ suite("JiT support dependencies", ({ afterEach }) => {
     writeDefinitionFile(
       projectDir,
       "jit_a.js",
-      'publish("jit_a", { type: "table" }).jitCode(async () => "SELECT 1 as val")'
+      'publish("jit_a", { type: "table" }).jitCode(async () => "SELECT 1 as val")',
     );
     writeDefinitionFile(
       projectDir,
       "jit_b.js",
       "publish('jit_b', { type: 'table', dependencies: ['jit_a'] }).jitCode(async (jctx) => {\n" +
-      "  const upstream = jctx.ref('jit_a');\n" +
-      "  return 'SELECT \\'' + upstream + '\\' as ref_name';\n" +
-      "})"
+        "  const upstream = jctx.ref('jit_a');\n" +
+        "  return 'SELECT \\'' + upstream + '\\' as ref_name';\n" +
+        "})",
     );
 
     const runResult = await runCli("run", [
@@ -75,13 +74,15 @@ suite("JiT support dependencies", ({ afterEach }) => {
       "--dry-run",
       "--json",
       "--actions=jit_b",
-      "--include-deps"
+      "--include-deps",
     ]);
 
     expect(runResult.exitCode).equals(0);
     const executedGraph = JSON.parse(runResult.stdout);
     expect(executedGraph.actions.length).to.equal(2);
     const actionB = executedGraph.actions.find((a: any) => a.target.name === "jit_b");
-    expect(actionB.tasks[0].compiledSql).to.include(`SELECT '\`${INTEGRATION_TEST_PROJECT}.dataform.jit_a\`' as ref_name`);
+    expect(actionB.tasks[0].compiledSql).to.include(
+      `SELECT '\`${INTEGRATION_TEST_PROJECT}.dataform.jit_a\`' as ref_name`,
+    );
   });
 });

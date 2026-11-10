@@ -1,14 +1,25 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("//testing:index.bzl", "ts_test_suite")
 load("//tools:ts_library.bzl", "ts_library")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["build_test.sh"])
+exports_files([
+    "build_test.sh",
+])
+
+js_library(
+    name = "resolver-patch",
+    srcs = ["resolver-patch.js"],
+    visibility = ["//visibility:public"],
+)
 
 ts_library(
     name = "testing",
     srcs = [
+        "bigquery.ts",
         "child_process.ts",
+        "credentials.ts",
         "fixtures.ts",
         "hook.ts",
         "index.ts",
@@ -17,20 +28,17 @@ ts_library(
         "test.ts",
     ],
     deps = [
-        "//:modules-fix",
+        "//:node_modules/@types/diff",
+        "//:node_modules/@types/fs-extra",
+        "//:node_modules/@types/js-yaml",
+        "//:node_modules/@types/json-stable-stringify",
+        "//:node_modules/@types/node",
+        "//:node_modules/chalk",
+        "//:node_modules/diff",
+        "//:node_modules/fs-extra",
+        "//:node_modules/js-yaml",
+        "//:node_modules/json-stable-stringify",
         "//protos:ts",
-        "@npm//@types/diff",
-        "@npm//@types/fs-extra",
-        "@npm//@types/js-yaml",
-        "@npm//@types/json-stable-stringify",
-        "@npm//@types/node",
-        "@npm//@types/rimraf",
-        "@npm//chalk",
-        "@npm//diff",
-        "@npm//fs-extra",
-        "@npm//js-yaml",
-        "@npm//json-stable-stringify",
-        "@npm//rimraf",
     ],
 )
 
@@ -40,26 +48,32 @@ ts_library(
         "run_core.ts",
     ],
     deps = [
+        "//:node_modules/@types/fs-extra",
+        "//:node_modules/@types/node",
+        "//:node_modules/fs-extra",
         "//common/protos",
+        "//common/vm:vm_runner",
         "//core",
         "//protos:ts",
-        "@npm//@types/fs-extra",
-        "@npm//@types/node",
-        "@npm//fs-extra",
-        "@npm//vm2",
     ],
 )
 
 ts_test_suite(
     name = "tests",
-    srcs = ["index_test.ts"],
+    srcs = [
+        "credentials_test.ts",
+        "index_test.ts",
+    ],
     deps = [
         ":testing",
-        "@npm//@types/chai",
-        "@npm//@types/diff",
-        "@npm//@types/json-stable-stringify",
-        "@npm//chai",
-        "@npm//diff",
-        "@npm//json-stable-stringify",
+        "//:node_modules/@types/chai",
+        "//:node_modules/@types/diff",
+        "//:node_modules/@types/fs-extra",
+        "//:node_modules/@types/json-stable-stringify",
+        "//:node_modules/@types/node",
+        "//:node_modules/chai",
+        "//:node_modules/diff",
+        "//:node_modules/fs-extra",
+        "//:node_modules/json-stable-stringify",
     ],
 )

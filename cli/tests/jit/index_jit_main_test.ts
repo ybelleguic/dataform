@@ -4,12 +4,13 @@ import {
   CREDENTIALS_PATH,
   INTEGRATION_TEST_PROJECT,
   runCli,
-  setupJitProject
+  setupJitProject,
 } from "df/cli/index_test_base";
-import { suite, test, writeDefinitionFile } from "df/testing";
+import { test, writeDefinitionFile } from "df/testing";
+import { integrationSuite } from "df/testing/credentials";
 import { TmpDirFixture } from "df/testing/fixtures";
 
-suite("JiT support main", ({ afterEach }) => {
+integrationSuite("JiT support main", ({ afterEach }) => {
   const tmpDirFixture = new TmpDirFixture(afterEach);
 
   test("compile command includes jitCode in output", async () => {
@@ -22,7 +23,7 @@ suite("JiT support main", ({ afterEach }) => {
     const jitTable = compiledGraph.tables.find((t: any) => t.target.name === "jit_table");
     expect(!!jitTable).to.equal(true);
     expect(jitTable.type).to.equal("table");
-    expect(jitTable.jitCode).to.contain("async (ctx) => { return \"SELECT 1 as id\"; }");
+    expect(jitTable.jitCode).to.contain('async (ctx) => { return "SELECT 1 as id"; }');
     expect(compiledGraph).to.have.property("jitData");
   });
 
@@ -32,7 +33,7 @@ suite("JiT support main", ({ afterEach }) => {
     writeDefinitionFile(
       projectDir,
       "conflict.js",
-      `publish("conflict", {type: "table"}).query("SELECT 1").jitCode(async (ctx) => "SELECT 2")`
+      `publish("conflict", {type: "table"}).query("SELECT 1").jitCode(async (ctx) => "SELECT 2")`,
     );
 
     const compileResult = await runCli("compile", [projectDir, "--json"]);
@@ -51,7 +52,7 @@ suite("JiT support main", ({ afterEach }) => {
       CREDENTIALS_PATH,
       "--dry-run",
       "--json",
-      "--actions=jit_table"
+      "--actions=jit_table",
     ]);
 
     expect(runResult.exitCode).equals(0);
@@ -74,7 +75,7 @@ suite("JiT support main", ({ afterEach }) => {
       "--credentials",
       CREDENTIALS_PATH,
       "--dry-run",
-      "--json"
+      "--json",
     ]);
 
     expect(runResult.exitCode).equals(0);
@@ -102,25 +103,22 @@ suite("JiT support main", ({ afterEach }) => {
       "disabled_jit.js",
       `publish("disabled_jit", { type: "table", disabled: true }).jitCode(async (jctx) => {
          throw new Error("Should not be executed");
-       })`
+       })`,
     );
 
     const runResult = await runCli(
       "run",
-      [
-        projectDir,
-        "--credentials",
-        CREDENTIALS_PATH,
-        "--actions=disabled_jit"
-      ],
+      [projectDir, "--credentials", CREDENTIALS_PATH, "--actions=disabled_jit"],
       {
-        env: { ...process.env, NO_COLOR: "1" }
-      }
+        env: { ...process.env, NO_COLOR: "1" },
+      },
     );
 
     expect(runResult.exitCode).equals(0);
     // When an action is disabled, it should print a "disabled" message.
-    expect(runResult.stdout).to.include("Dataset creation disabled:  dataform.disabled_jit [table] [disabled]");
+    expect(runResult.stdout).to.include(
+      "Dataset creation disabled:  dataform.disabled_jit [table] [disabled]",
+    );
   });
 
   test("JiT compilation failure reporting", async () => {
@@ -129,7 +127,7 @@ suite("JiT support main", ({ afterEach }) => {
     writeDefinitionFile(
       projectDir,
       "failing_jit.js",
-      `publish("failing_jit", {type: "table"}).jitCode(async (ctx) => { throw new Error("JiT compilation failed!"); })`
+      `publish("failing_jit", {type: "table"}).jitCode(async (ctx) => { throw new Error("JiT compilation failed!"); })`,
     );
 
     const runResult = await runCli("run", [
@@ -138,7 +136,7 @@ suite("JiT support main", ({ afterEach }) => {
       CREDENTIALS_PATH,
       "--dry-run",
       "--json",
-      "--actions=failing_jit"
+      "--actions=failing_jit",
     ]);
 
     expect(runResult.exitCode).equals(1);
@@ -163,7 +161,7 @@ suite("JiT support main", ({ afterEach }) => {
          // and jctx.adapter.getTable throws an error in this case.
          const table = await jctx.adapter.getTable({target: {database: "${INTEGRATION_TEST_PROJECT}", schema: "sch", name: "tab"}});
          return "SELECT 1 as id";
-       })`
+       })`,
     );
 
     const runResult = await runCli("run", [
@@ -172,7 +170,7 @@ suite("JiT support main", ({ afterEach }) => {
       CREDENTIALS_PATH,
       "--dry-run",
       "--json",
-      "--actions=rpc_jit"
+      "--actions=rpc_jit",
     ]);
 
     expect(runResult.exitCode).equals(1);
@@ -201,7 +199,7 @@ suite("JiT support main", ({ afterEach }) => {
       CREDENTIALS_PATH,
       "--dry-run",
       "--json",
-      "--actions=jit_table"
+      "--actions=jit_table",
     ]);
 
     expect(runResult.exitCode).equals(0);
@@ -225,7 +223,7 @@ suite("JiT support main", ({ afterEach }) => {
       CREDENTIALS_PATH,
       "--dry-run",
       "--json",
-      "--actions=aot_table"
+      "--actions=aot_table",
     ]);
 
     expect(runResult.exitCode).equals(0);
@@ -234,6 +232,64 @@ suite("JiT support main", ({ afterEach }) => {
     expect(executedGraph.actions.length).to.equal(1);
     const aotAction = executedGraph.actions.find((a: any) => a.target.name === "aot_table");
     expect(!!aotAction).to.equal(true);
-    expect(aotAction.tasks[0].statement).to.include("SELECT 2 as id");
+    expect(aotAction.tasks[0].compiledSql).to.include("SELECT 2 as id");
+  });
+
+  test("SQLX files with compilation_mode: 'jit' compile and dry-run via CLI", async () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    await setupJitProject(tmpDirFixture, projectDir);
+    writeDefinitionFile(
+      projectDir,
+      "sqlx_jit_table.sqlx",
+      `config { type: "table", compilation_mode: "jit" }
+js {
+  const prefix = "sqlx";
+}
+SELECT '\${prefix}' AS source, 1 AS id`,
+    );
+    writeDefinitionFile(
+      projectDir,
+      "sqlx_jit_assert.sqlx",
+      `config { type: "assertion", compilation_mode: "jit", dependencies: ["sqlx_jit_table"] }
+SELECT '\${ref("sqlx_jit_table")}' AS ref_target`,
+    );
+
+    const runResult = await runCli("run", [
+      projectDir,
+      "--credentials",
+      CREDENTIALS_PATH,
+      "--dry-run",
+      "--json",
+      "--actions=sqlx_jit_table,sqlx_jit_assert",
+    ]);
+
+    expect(runResult.exitCode).equals(0);
+    const executedGraph = JSON.parse(runResult.stdout);
+    const tableAction = executedGraph.actions.find((a: any) => a.target.name === "sqlx_jit_table");
+    const assertAction = executedGraph.actions.find(
+      (a: any) => a.target.name === "sqlx_jit_assert",
+    );
+    expect(!!tableAction).to.equal(true);
+    expect(tableAction.tasks[0].compiledSql).to.include("SELECT 'sqlx' AS source, 1 AS id");
+    expect(!!assertAction).to.equal(true);
+    expect(assertAction.tasks[0].compiledSql).to.include(
+      `SELECT '\`${INTEGRATION_TEST_PROJECT}.dataform.sqlx_jit_table\`' AS ref_target`,
+    );
+  });
+
+  test("SQLX JiT reports const data redeclaration at compile time", async () => {
+    const projectDir = tmpDirFixture.createNewTmpDir();
+    await setupJitProject(tmpDirFixture, projectDir);
+    writeDefinitionFile(
+      projectDir,
+      "dup_data.sqlx",
+      `config { type: "table", compilation_mode: "jit" }
+js { const data = ["a", "b"]; }
+SELECT \${data.length} AS n`,
+    );
+
+    const compileResult = await runCli("compile", [projectDir, "--json"]);
+    expect(compileResult.exitCode).equals(1);
+    expect(compileResult.stdout).to.include("Identifier 'data' has already been declared");
   });
 });

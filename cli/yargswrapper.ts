@@ -26,6 +26,17 @@ export interface INamedOption<TOption, TArgs> {
   name: string;
   option: TOption;
   check?: (args: yargs.Arguments<TArgs>) => void;
+  // Documentation-only metadata used to generate cli/README.md. It is not passed to yargs.
+  docs?: IOptionDocs;
+}
+
+export interface IOptionDocs {
+  // The default shown in cli/README.md, as markdown, when the effective default is computed at
+  // runtime rather than declared in `option.default`.
+  default?: string;
+  // Marks a positional argument as required in cli/README.md when it is validated at runtime
+  // (e.g. in a `check`) rather than by yargs.
+  required?: boolean;
 }
 
 export function createYargsCli(cli: ICli) {
@@ -62,7 +73,7 @@ export function setupYargs(commands: ICommandBase[], args: string[]) {
       async (argv: any) => {
         const exitCode = await command.processFn(argv);
         process.exit(exitCode);
-      }
+      },
     );
   }
   return yargsChain;
@@ -87,8 +98,8 @@ function buildCommand(yargsChain: yargs.Argv, command: ICommandBase) {
       checks.push(option.check);
     }
   }
-  yargsChain = yargsChain.check(argv => {
-    checks.forEach(check => check(argv));
+  yargsChain = yargsChain.check((argv) => {
+    checks.forEach((check) => check(argv));
     return true;
   });
   return yargsChain;

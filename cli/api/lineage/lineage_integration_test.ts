@@ -1,10 +1,21 @@
 import { expect } from "chai";
 
 import { run } from "df/cli/api/commands/run";
-import { IDbAdapter, IDbClient, IExecutionResult, IExecutionResultRaw } from "df/cli/api/dbadapters";
+import {
+  IDbAdapter,
+  IDbClient,
+  IExecutionResult,
+  IExecutionResultRaw,
+} from "df/cli/api/dbadapters";
 import { QueryOrAction } from "df/cli/api/dbadapters/execution_sql";
-import { createLineageEmitter, ILineageEmitterFactoryInput } from "df/cli/api/lineage/emitter_factory";
-import { recorderProvider, RecordingLineageClient } from "df/cli/api/lineage/testing/mock_lineage_client";
+import {
+  createLineageEmitter,
+  ILineageEmitterFactoryInput,
+} from "df/cli/api/lineage/emitter_factory";
+import {
+  recorderProvider,
+  RecordingLineageClient,
+} from "df/cli/api/lineage/testing/mock_lineage_client";
 import { dataform } from "df/protos/ts";
 import { suite, test } from "df/testing";
 
@@ -23,7 +34,7 @@ class StderrCapture {
     return true;
   }
   public contains(needle: string): boolean {
-    return this.writes.some(w => w.includes(needle));
+    return this.writes.some((w) => w.includes(needle));
   }
 }
 
@@ -36,8 +47,9 @@ class FakeDbAdapter implements IDbAdapter {
   public executed: string[] = [];
 
   public async execute(statement: string): Promise<IExecutionResult> {
+    const jobIndex = this.executed.length;
     this.executed.push(statement);
-    return { rows: [], metadata: {} };
+    return { rows: [], metadata: { bigquery: { jobId: `job-${jobIndex}` } } };
   }
   public async executeRaw(statement: string): Promise<IExecutionResultRaw> {
     return { rows: [], metadata: {} };
@@ -48,11 +60,9 @@ class FakeDbAdapter implements IDbAdapter {
   public async evaluate(queryOrAction: QueryOrAction): Promise<dataform.IQueryEvaluation[]> {
     return [];
   }
-  public async schemas(database: string): Promise<string[]> {
-    return [];
-  }
-  public async createSchema(database: string, schema: string): Promise<void> {
-    return;
+  public async schemas(database?: string): Promise<string[]> {
+    // The target datasets exist, so tasks aren't wrapped in a script creating them.
+    return ["s", "s_assertions"];
   }
   public async tables(database: string, schema?: string): Promise<dataform.ITableMetadata[]> {
     return [];
@@ -73,34 +83,48 @@ class FakeDbAdapter implements IDbAdapter {
 
 function makeLinearGraph(): dataform.IExecutionGraph {
   return dataform.ExecutionGraph.create({
-    projectConfig: { warehouse: "bigquery", defaultDatabase: "test-project", defaultLocation: "US" },
+    projectConfig: {
+      warehouse: "bigquery",
+      defaultDatabase: "test-project",
+      defaultLocation: "US",
+    },
     runConfig: {},
     warehouseState: { tables: [] },
     actions: [
       {
         target: { database: "test-project", schema: "s", name: "table_a" },
         type: "table",
-        tasks: [{ type: "statement", statement: "CREATE TABLE test-project.s.table_a AS SELECT 1" }],
-        dependencyTargets: []
+        tasks: [
+          { type: "statement", statement: "CREATE TABLE test-project.s.table_a AS SELECT 1" },
+        ],
+        dependencyTargets: [],
       },
       {
         target: { database: "test-project", schema: "s", name: "table_b" },
         type: "table",
-        tasks: [{ type: "statement", statement: "CREATE TABLE test-project.s.table_b AS SELECT * FROM table_a" }],
-        dependencyTargets: [{ database: "test-project", schema: "s", name: "table_a" }]
-      }
-    ]
+        tasks: [
+          {
+            type: "statement",
+            statement: "CREATE TABLE test-project.s.table_b AS SELECT * FROM table_a",
+          },
+        ],
+        dependencyTargets: [{ database: "test-project", schema: "s", name: "table_a" }],
+      },
+    ],
   });
 }
 
-function factoryInput(overrides: Partial<ILineageEmitterFactoryInput> = {}): ILineageEmitterFactoryInput {
+function factoryInput(
+  overrides: Partial<ILineageEmitterFactoryInput> = {},
+): ILineageEmitterFactoryInput {
   return {
     cliEmitLineage: undefined,
     workflowLineageEnabled: undefined,
     dryRun: false,
     projectDir: "/workspaces/test-project",
     readCredentials: dataform.BigQuery.create({ projectId: "test-project", location: "US" }),
-    ...overrides
+    location: "US",
+    ...overrides,
   };
 }
 
@@ -111,7 +135,7 @@ suite("--emit-lineage integration", { parallel: true }, () => {
     const emitter = createLineageEmitter(
       factoryInput({ cliEmitLineage: true }),
       stderr,
-      recorderProvider(recorder)
+      recorderProvider(recorder),
     );
     expect(emitter).to.not.equal(undefined);
 
@@ -151,12 +175,84 @@ suite("--emit-lineage integration", { parallel: true }, () => {
     }
   });
 
+  test("Case 1b — every BigQuery-job action type emits; declarations do not", async () => {
+    const recorder = new RecordingLineageClient();
+    const emitter = createLineageEmitter(
+      factoryInput({ cliEmitLineage: true }),
+      new StderrCapture(),
+      recorderProvider(recorder),
+    );
+    expect(emitter).to.not.equal(undefined);
+
+    const graph = makeLinearGraph();
+    graph.actions.push(
+      dataform.ExecutionAction.create({
+        target: { database: "test-project", schema: "s_assertions", name: "assert_a" },
+        type: "assertion",
+        tasks: [
+          { type: "statement", statement: "CREATE OR REPLACE VIEW s_assertions.assert_a AS ..." },
+          { type: "assertion", statement: "SELECT SUM(1) AS row_count FROM s_assertions.assert_a" },
+        ],
+        dependencyTargets: [{ database: "test-project", schema: "s", name: "table_a" }],
+      }),
+      dataform.ExecutionAction.create({
+        target: { database: "test-project", schema: "s", name: "graph" },
+        type: "propertyGraph",
+        tasks: [{ type: "statement", statement: "CREATE OR REPLACE PROPERTY GRAPH s.graph ..." }],
+        dependencyTargets: [{ database: "test-project", schema: "s", name: "table_a" }],
+      }),
+      dataform.ExecutionAction.create({
+        target: { database: "bigquery-public-data", schema: "samples", name: "shakespeare" },
+        type: "declaration",
+        tasks: [],
+      }),
+    );
+
+    const dbadapter = new FakeDbAdapter();
+    const runner = run(dbadapter, graph, { lineageEmitter: emitter });
+    await runner.result();
+    await emitter!.drain();
+
+    const eventsByActionType = new Map<string, string[]>();
+    let assertionCompletePayload: any;
+    for (const call of recorder.calls) {
+      const ol = fromProtoStruct(call.request.openLineage);
+      const actionType = ol.job.facets.gcp_bq_pipelines_job.actionType as string;
+      if (!eventsByActionType.has(actionType)) {
+        eventsByActionType.set(actionType, []);
+      }
+      eventsByActionType.get(actionType).push(ol.eventType as string);
+      if (actionType === "ASSERTION" && ol.eventType === "COMPLETE") {
+        assertionCompletePayload = ol;
+      }
+    }
+    // 2 tables + 1 assertion + 1 property graph, each START + COMPLETE.
+    expect(recorder.calls.length).to.equal(8);
+    expect([...eventsByActionType.keys()].sort()).to.deep.equal([
+      "ASSERTION",
+      "PROPERTY_GRAPH",
+      "TABLE",
+    ]);
+    expect(eventsByActionType.get("ASSERTION").sort()).to.deep.equal(["COMPLETE", "START"]);
+    expect(eventsByActionType.get("PROPERTY_GRAPH").sort()).to.deep.equal(["COMPLETE", "START"]);
+
+    // Verify end-to-end with Runner.executeAction that the assertion COMPLETE
+    // event selects the CREATE VIEW task's jobId and skips the assertion check task.
+    const createViewJobIndex = dbadapter.executed.findIndex((sql) =>
+      sql.startsWith("CREATE OR REPLACE VIEW s_assertions.assert_a"),
+    );
+    expect(createViewJobIndex).to.be.greaterThan(-1);
+    expect(assertionCompletePayload.run.facets.externalQuery.externalQueryId).to.equal(
+      `test-project.us.job-${createViewJobIndex}`,
+    );
+  });
+
   test("Case 2 — workflow lineage.enabled=true (no CLI flag) enables emission", async () => {
     const recorder = new RecordingLineageClient();
     const emitter = createLineageEmitter(
       factoryInput({ workflowLineageEnabled: true }),
       new StderrCapture(),
-      recorderProvider(recorder)
+      recorderProvider(recorder),
     );
     expect(emitter).to.not.equal(undefined);
 
@@ -185,7 +281,7 @@ suite("--emit-lineage integration", { parallel: true }, () => {
     const emitter = createLineageEmitter(
       factoryInput({ cliEmitLineage: false, workflowLineageEnabled: true }),
       stderr,
-      recorderProvider(recorder)
+      recorderProvider(recorder),
     );
 
     expect(emitter).to.equal(undefined);
@@ -206,7 +302,7 @@ suite("--emit-lineage integration", { parallel: true }, () => {
     const emitter = createLineageEmitter(
       factoryInput({ cliEmitLineage: true }),
       stderr,
-      recorderProvider(recorder)
+      recorderProvider(recorder),
     );
 
     const dbadapter = new FakeDbAdapter();
@@ -216,7 +312,7 @@ suite("--emit-lineage integration", { parallel: true }, () => {
 
     expect(runResult.status).to.equal(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
     expect(dbadapter.executed.length).to.equal(2);
-    const skipLines = stderr.writes.filter(w => w.includes("skip_reason=api_disabled"));
+    const skipLines = stderr.writes.filter((w) => w.includes("skip_reason=api_disabled"));
     expect(skipLines.length).to.equal(1);
   });
 
@@ -226,7 +322,7 @@ suite("--emit-lineage integration", { parallel: true }, () => {
     const emitter = createLineageEmitter(
       factoryInput({ cliEmitLineage: true }),
       new StderrCapture(),
-      recorderProvider(recorder)
+      recorderProvider(recorder),
     );
 
     const runner = run(new FakeDbAdapter(), makeLinearGraph(), { lineageEmitter: emitter });
@@ -237,6 +333,79 @@ suite("--emit-lineage integration", { parallel: true }, () => {
     const elapsed = Date.now() - started;
     // 200ms bound + generous slack for CI jitter.
     expect(elapsed).to.be.lessThan(2000);
+  });
+
+  test("explicit location takes precedence over credentials location", async () => {
+    const recorder = new RecordingLineageClient();
+    const emitter = createLineageEmitter(
+      factoryInput({
+        cliEmitLineage: true,
+        location: "europe-west1",
+        readCredentials: dataform.BigQuery.create({ projectId: "test-project", location: "US" }),
+      }),
+      new StderrCapture(),
+      recorderProvider(recorder),
+    );
+    expect(emitter).to.not.equal(undefined);
+
+    await run(new FakeDbAdapter(), makeLinearGraph(), { lineageEmitter: emitter }).result();
+    await emitter!.drain();
+
+    expect(recorder.calls.length).to.be.greaterThan(0);
+    for (const call of recorder.calls) {
+      expect(call.request.parent).to.equal("projects/test-project/locations/europe-west1");
+    }
+  });
+
+  test("falls back to credentials location when no explicit location is given", async () => {
+    const recorder = new RecordingLineageClient();
+    const emitter = createLineageEmitter(
+      factoryInput({
+        cliEmitLineage: true,
+        location: undefined,
+        readCredentials: dataform.BigQuery.create({ projectId: "test-project", location: "EU" }),
+      }),
+      new StderrCapture(),
+      recorderProvider(recorder),
+    );
+    expect(emitter).to.not.equal(undefined);
+
+    await run(new FakeDbAdapter(), makeLinearGraph(), { lineageEmitter: emitter }).result();
+    await emitter!.drain();
+
+    expect(recorder.calls.length).to.be.greaterThan(0);
+    for (const call of recorder.calls) {
+      expect(call.request.parent).to.equal("projects/test-project/locations/eu");
+    }
+  });
+
+  test("lineage is disabled with a warning when no location is set", async () => {
+    const recorder = new RecordingLineageClient();
+    const stderr = new StderrCapture();
+    const graph = makeLinearGraph();
+    delete graph.projectConfig.defaultLocation;
+
+    const emitter = createLineageEmitter(
+      factoryInput({
+        cliEmitLineage: true,
+        location: graph.projectConfig.defaultLocation || undefined,
+        readCredentials: dataform.BigQuery.create({ projectId: "test-project" }),
+      }),
+      stderr,
+      recorderProvider(recorder),
+    );
+    expect(emitter).to.equal(undefined);
+    expect(stderr.contains("Lineage emission is enabled, but no location was specified")).to.equal(
+      true,
+    );
+
+    const dbadapter = new FakeDbAdapter();
+    const result = await run(dbadapter, graph, { lineageEmitter: emitter }).result();
+
+    expect(result.status).to.equal(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+    expect(dbadapter.executed.length).to.be.greaterThan(0);
+    expect(recorder.calls.length).to.equal(0);
+    expect(recorder.providerCalls.length).to.equal(0);
   });
 });
 

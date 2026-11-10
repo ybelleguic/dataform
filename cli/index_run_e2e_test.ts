@@ -1,8 +1,9 @@
 import { expect } from "chai";
 import * as fs from "fs-extra";
-import { dump as dumpYaml, load as loadYaml } from "js-yaml";
 import * as path from "path";
 
+import * as dfapi from "df/cli/api";
+import { BigQueryDbAdapter } from "df/cli/api/dbadapters/bigquery";
 import {
   alterWorkflowSettings,
   CREDENTIALS_PATH,
@@ -10,13 +11,20 @@ import {
   INTEGRATION_TEST_PROJECT,
   INTEGRATION_TEST_RESERVATION,
   runCli,
-  setupProject
+  setupProject,
 } from "df/cli/index_test_base";
 import { version } from "df/core/version";
+import { dataform } from "df/protos/ts";
 import { suite, test, writeDefinitionFile } from "df/testing";
+import { dropDatasets, dropStaleDatasets, makeUniqueSuffix } from "df/testing/bigquery";
+import { integrationSuite } from "df/testing/credentials";
 import { TmpDirFixture } from "df/testing/fixtures";
 
-suite("run e2e", ({ afterEach }) => {
+const ON_SCHEMA_CHANGE_DATASET = "dataform_e2e_osc";
+const OPERATIONS_DATASET = "dataform_e2e_ops";
+const JSON_OUTPUT_DATASET = "dataform_e2e_json";
+
+integrationSuite("run e2e", ({ afterEach }) => {
   const tmpDirFixture = new TmpDirFixture(afterEach);
 
   test("golden path with package.json", async () => {
@@ -30,19 +38,16 @@ suite("run e2e", ({ afterEach }) => {
       `
 config { type: "table", tags: ["someTag"] }
 select 1 as \${dataform.projectConfig.vars.testVar2}
-`
+`,
     );
 
     // Compile the project using the CLI.
-    const compileResult = await runCli(
-      "compile", 
-      [
-        projectDir,
-        "--json",
-        "--vars=testVar1=testValue1,testVar2=testValue2",
-        "--schema-suffix=test_schema_suffix"
-      ]
-    );
+    const compileResult = await runCli("compile", [
+      projectDir,
+      "--json",
+      "--vars=testVar1=testValue1,testVar2=testValue2",
+      "--schema-suffix=test_schema_suffix",
+    ]);
 
     expect(compileResult.exitCode).equals(0);
 
@@ -54,19 +59,19 @@ select 1 as \${dataform.projectConfig.vars.testVar2}
           target: {
             database: INTEGRATION_TEST_PROJECT,
             schema: "dataform_test_schema_suffix",
-            name: "example"
+            name: "example",
           },
           canonicalTarget: {
             schema: "dataform",
             name: "example",
-            database: INTEGRATION_TEST_PROJECT
+            database: INTEGRATION_TEST_PROJECT,
           },
           query: "\n\nselect 1 as testValue2\n",
           disabled: false,
           fileName: "definitions/example.sqlx",
           hermeticity: "NON_HERMETIC",
-          tags: ["someTag"]
-        }
+          tags: ["someTag"],
+        },
       ],
       projectConfig: {
         warehouse: "bigquery",
@@ -76,9 +81,9 @@ select 1 as \${dataform.projectConfig.vars.testVar2}
         defaultLocation: INTEGRATION_TEST_LOCATION,
         vars: {
           testVar1: "testValue1",
-          testVar2: "testValue2"
+          testVar2: "testValue2",
         },
-        schemaSuffix: "test_schema_suffix"
+        schemaSuffix: "test_schema_suffix",
       },
       graphErrors: {},
       jitData: {},
@@ -87,26 +92,23 @@ select 1 as \${dataform.projectConfig.vars.testVar2}
         {
           database: INTEGRATION_TEST_PROJECT,
           schema: "dataform",
-          name: "example"
-        }
-      ]
+          name: "example",
+        },
+      ],
     });
 
-    // Dry run the project.
-    const runResult = await runCli(
-      "run", 
-      [
-        projectDir,
-        "--credentials",
-        CREDENTIALS_PATH,
-        "--dry-run",
-        "--json",
-        "--vars=testVar1=testValue1,testVar2=testValue2",
-        "--default-location=europe",
-        "--tags=someTag,someOtherTag",
-        "--actions=example,someOtherAction"
-      ]
-    );
+    // Build the execution graph.
+    const runResult = await runCli("run", [
+      projectDir,
+      "--credentials",
+      CREDENTIALS_PATH,
+      "--build-only",
+      "--json",
+      "--vars=testVar1=testValue1,testVar2=testValue2",
+      "--default-location=europe",
+      "--tags=someTag,someOtherTag",
+      "--actions=example,someOtherAction",
+    ]);
 
     if (runResult.exitCode !== 0 || runResult.stdout.trim().length === 0) {
       console.error("GOLDEN PATH FAILED. STDERR:", runResult.stderr);
@@ -122,17 +124,16 @@ select 1 as \${dataform.projectConfig.vars.testVar2}
           target: {
             database: INTEGRATION_TEST_PROJECT,
             name: "example",
-            schema: "dataform"
+            schema: "dataform",
           },
           tasks: [
             {
-              statement:
-                `create or replace table \`${INTEGRATION_TEST_PROJECT}.dataform.example\` as \n\nselect 1 as testValue2`,
-              type: "statement"
-            }
+              statement: `create or replace table \`${INTEGRATION_TEST_PROJECT}.dataform.example\` as \n\nselect 1 as testValue2`,
+              type: "statement",
+            },
           ],
-          type: "table"
-        }
+          type: "table",
+        },
       ],
       jitData: {},
       projectConfig: {
@@ -143,15 +144,15 @@ select 1 as \${dataform.projectConfig.vars.testVar2}
         warehouse: "bigquery",
         vars: {
           testVar1: "testValue1",
-          testVar2: "testValue2"
-        }
+          testVar2: "testValue2",
+        },
       },
       runConfig: {
         fullRefresh: false,
         tags: ["someTag", "someOtherTag"],
-        actions: ["example", "someOtherAction"]
+        actions: ["example", "someOtherAction"],
       },
-      warehouseState: {}
+      warehouseState: {},
     });
   });
 
@@ -168,7 +169,7 @@ select 1 as \${dataform.projectConfig.vars.testVar2}
         `
 config { type: "assertion" }
 SELECT 1 WHERE FALSE
-`
+`,
       );
 
       writeDefinitionFile(
@@ -182,11 +183,11 @@ config {
   }
 }
 SELECT 1 as id
-`
+`,
       );
     });
 
-    const expectedRunResult = {
+    const expectedExecutionGraph = {
       actions: [
         {
           fileName: "definitions/example_table.sqlx",
@@ -195,16 +196,15 @@ SELECT 1 as id
           target: {
             database: INTEGRATION_TEST_PROJECT,
             name: "example_table",
-            schema: "dataform"
+            schema: "dataform",
           },
           tasks: [
             {
-              statement:
-                `create or replace table \`${INTEGRATION_TEST_PROJECT}.dataform.example_table\` as \n\nSELECT 1 as id`,
-              type: "statement"
-            }
+              statement: `create or replace table \`${INTEGRATION_TEST_PROJECT}.dataform.example_table\` as \n\nSELECT 1 as id`,
+              type: "statement",
+            },
           ],
-          type: "table"
+          type: "table",
         },
         {
           fileName: "definitions/test_assertion.sqlx",
@@ -212,10 +212,10 @@ SELECT 1 as id
           target: {
             database: INTEGRATION_TEST_PROJECT,
             name: "test_assertion",
-            schema: "dataform_assertions"
+            schema: "dataform_assertions",
           },
-          type: "assertion"
-        }
+          type: "assertion",
+        },
       ],
       jitData: {},
       projectConfig: {
@@ -224,85 +224,75 @@ SELECT 1 as id
         defaultLocation: INTEGRATION_TEST_LOCATION,
         defaultSchema: "dataform",
         disableAssertions: true,
-        warehouse: "bigquery"
+        warehouse: "bigquery",
       },
       runConfig: {
         actions: ["test_assertion", "example_table"],
-        fullRefresh: false
+        fullRefresh: false,
       },
-      warehouseState: {}
+      warehouseState: {},
     };
 
     test("with --disable-assertions flag", async () => {
       alterWorkflowSettings(projectDir, { disableAssertions: false });
 
-      const runResult = await runCli(
-        "run",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--dry-run",
-          "--json",
-          "--disable-assertions",
-          "--actions=test_assertion,example_table"
-        ]
-      );
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--build-only",
+        "--json",
+        "--disable-assertions",
+        "--actions=test_assertion,example_table",
+      ]);
 
       if (runResult.exitCode !== 0 || runResult.stdout.trim().length === 0) {
         console.error("ASSERTIONS TEST FAILED. STDERR:", runResult.stderr);
       }
       expect(runResult.exitCode).equals(0);
-      expect(JSON.parse(runResult.stdout)).deep.equals(expectedRunResult);
+      expect(JSON.parse(runResult.stdout)).deep.equals(expectedExecutionGraph);
     });
 
     test("with disableAssertions set in workflow_settings.yaml", async () => {
       alterWorkflowSettings(projectDir, { disableAssertions: true });
 
-      const runResult = await runCli(
-        "run",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--dry-run",
-          "--json",
-          "--actions=test_assertion,example_table"
-        ]
-      );
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--build-only",
+        "--json",
+        "--actions=test_assertion,example_table",
+      ]);
 
       if (runResult.exitCode !== 0 || runResult.stdout.trim().length === 0) {
         console.error("ASSERTIONS TEST FAILED. STDERR:", runResult.stderr);
       }
       expect(runResult.exitCode).equals(0);
-      expect(JSON.parse(runResult.stdout)).deep.equals(expectedRunResult);
+      expect(JSON.parse(runResult.stdout)).deep.equals(expectedExecutionGraph);
     });
 
     test("with --job-labels flag", async () => {
       alterWorkflowSettings(projectDir, { disableAssertions: false });
 
-      const runResult = await runCli(
-        "run",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--dry-run",
-          "--json",
-          "--disable-assertions",
-          "--actions=test_assertion,example_table",
-          "--job-labels=env=testing,team=dataform"
-        ]
-      );
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--build-only",
+        "--json",
+        "--disable-assertions",
+        "--actions=test_assertion,example_table",
+        "--job-labels=env=testing,team=dataform",
+      ]);
 
       if (runResult.exitCode !== 0 || runResult.stdout.trim().length === 0) {
         console.error("ASSERTIONS TEST FAILED. STDERR:", runResult.stderr);
       }
       expect(runResult.exitCode).equals(0);
-      expect(JSON.parse(runResult.stdout)).deep.equals(expectedRunResult);
+      expect(JSON.parse(runResult.stdout)).deep.equals(expectedExecutionGraph);
     });
   });
-
 
   suite("--default-reservation flag", ({ beforeEach }) => {
     let projectDir: string;
@@ -317,19 +307,16 @@ SELECT 1 as id
         `
 config { type: "table" }
 SELECT 1 as id
-`
+`,
       );
     });
 
     test("--default-reservation flag is applied to projectConfig in compile output", async () => {
-      const compileResult = await runCli(
-        "compile",
-        [
-          projectDir,
-          "--json",
-          `--default-reservation=${INTEGRATION_TEST_RESERVATION}`
-        ]
-      );
+      const compileResult = await runCli("compile", [
+        projectDir,
+        "--json",
+        `--default-reservation=${INTEGRATION_TEST_RESERVATION}`,
+      ]);
 
       expect(compileResult.exitCode).equals(0);
       const compiledGraph = JSON.parse(compileResult.stdout);
@@ -339,23 +326,20 @@ SELECT 1 as id
         assertionSchema: "dataform_assertions",
         defaultDatabase: INTEGRATION_TEST_PROJECT,
         defaultLocation: INTEGRATION_TEST_LOCATION,
-        defaultReservation: INTEGRATION_TEST_RESERVATION
+        defaultReservation: INTEGRATION_TEST_RESERVATION,
       });
     });
 
-    test("--default-reservation flag is applied to projectConfig in run (dry-run) output", async () => {
-      const runResult = await runCli(
-        "run",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--dry-run",
-          "--json",
-          `--default-reservation=${INTEGRATION_TEST_RESERVATION}`,
-          "--actions=example_table"
-        ]
-      );
+    test("--default-reservation flag is applied to projectConfig in run --build-only output", async () => {
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--build-only",
+        "--json",
+        `--default-reservation=${INTEGRATION_TEST_RESERVATION}`,
+        "--actions=example_table",
+      ]);
 
       expect(runResult.exitCode).equals(0);
       const executionGraph = JSON.parse(runResult.stdout);
@@ -365,7 +349,7 @@ SELECT 1 as id
         assertionSchema: "dataform_assertions",
         defaultDatabase: INTEGRATION_TEST_PROJECT,
         defaultLocation: INTEGRATION_TEST_LOCATION,
-        defaultReservation: INTEGRATION_TEST_RESERVATION
+        defaultReservation: INTEGRATION_TEST_RESERVATION,
       });
     });
   });
@@ -378,12 +362,12 @@ SELECT 1 as id
       await setupProject(tmpDirFixture, projectDir);
       // Write a simple file to the project.
       writeDefinitionFile(
-          projectDir,
-          "example.sqlx",
-          `
+        projectDir,
+        "example.sqlx",
+        `
 config { type: "table" }
 select 1
-`
+`,
       );
     });
 
@@ -392,30 +376,29 @@ select 1
       writeDefinitionFile(
         projectDir,
         "example_test.sqlx",
-      `
+        `
 config { type: "test", dataset: "example" }
 select 1
-`
+`,
       );
 
       // Run tests using the CLI.
-      const testResult = await runCli(
-        "test",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--json"
-        ]
-      );
+      const testResult = await runCli("test", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--json",
+      ]);
 
       expect(testResult.exitCode).equals(0);
 
-      expect(JSON.parse(testResult.stdout)).deep.equals([    {
-        "name": "example_test",
-        "successful": true,
-      }]);
-  });
+      expect(JSON.parse(testResult.stdout)).deep.equals([
+        {
+          name: "example_test",
+          successful: true,
+        },
+      ]);
+    });
 
     test("golden with failed unit test", async () => {
       // Write a simple failing test to the project.
@@ -425,36 +408,45 @@ select 1
         `
 config { type: "test", dataset: "example" }
 select 2
-`
+`,
       );
 
       // Run tests using the CLI.
-      const testResult = await runCli(
-        "test",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--json"
-        ]
-      );
+      const testResult = await runCli("test", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--json",
+      ]);
 
       expect(testResult.exitCode).equals(1);
 
-      expect(JSON.parse(testResult.stdout)).deep.equals([{
-        "name": "example_test",
-        "successful": false,
-        messages: [
-          "For row 0 and column \"f0_\": expected \"2\", but saw \"1\"."
-        ]
-      }]);
+      expect(JSON.parse(testResult.stdout)).deep.equals([
+        {
+          name: "example_test",
+          successful: false,
+          messages: ['For row 0 and column "f0_": expected "2", but saw "1".'],
+        },
+      ]);
     });
-
   });
 
-  suite("onSchemaChange", ({ beforeEach }) => {
+  suite("onSchemaChange", ({ before, beforeEach, after }) => {
     let projectDir: string;
-    const uniqueDataset = `dataform_e2e_osc_${Math.random().toString(36).substring(7)}`;
+    const dbadapter = new BigQueryDbAdapter(dfapi.credentials.read(CREDENTIALS_PATH));
+    const uniqueDataset = `${ON_SCHEMA_CHANGE_DATASET}_${makeUniqueSuffix()}`;
+
+    before("drop stale datasets", async () => {
+      await dropStaleDatasets(dbadapter, {
+        project: INTEGRATION_TEST_PROJECT,
+        location: INTEGRATION_TEST_LOCATION,
+        prefixes: [ON_SCHEMA_CHANGE_DATASET],
+      });
+    });
+
+    after("drop datasets", async () => {
+      await dropDatasets(dbadapter, INTEGRATION_TEST_PROJECT, [uniqueDataset]);
+    });
 
     beforeEach("setup test project", async () => {
       projectDir = tmpDirFixture.createNewTmpDir();
@@ -467,8 +459,10 @@ select 2
 config { 
   type: "operations"
 }
+-- Operations without an output don't get their dataset created by Dataform.
+CREATE SCHEMA IF NOT EXISTS \`\${dataform.projectConfig.defaultDatabase}.\${dataform.projectConfig.defaultSchema}\`;
 CREATE OR REPLACE TABLE \`\${dataform.projectConfig.defaultDatabase}.\${dataform.projectConfig.defaultSchema}.example_incremental\` AS SELECT 1 AS id, 'old' AS field1
-`
+`,
       );
 
       writeDefinitionFile(
@@ -480,7 +474,7 @@ config {
   onSchemaChange: "EXTEND"
 }
 SELECT 1 as id, 'new' as field1, 'new2' as field2
-`
+`,
       );
 
       writeDefinitionFile(
@@ -491,94 +485,137 @@ config {
   type: "operations"
 }
 DROP SCHEMA IF EXISTS \`\${dataform.projectConfig.defaultDatabase}.\${dataform.projectConfig.defaultSchema}\` CASCADE
-`
+`,
       );
     });
 
-    test("generates dynamic SQL for EXTEND when table exists in BigQuery", { timeout: 120000 }, async () => {
-      try {
-        // Run setup operation to create the table in BigQuery.
-        // Dataform will automatically create the uniqueDataset schema.
-        await runCli(
-          "run",
-          [
+    test(
+      "generates dynamic SQL for EXTEND when table exists in BigQuery",
+      { timeout: 120000 },
+      async () => {
+        try {
+          // Run setup operation to create the uniqueDataset schema and the table in BigQuery.
+          await runCli("run", [
             projectDir,
             "--credentials",
             CREDENTIALS_PATH,
-            "--actions=setup_table"
-          ]
-        );
+            "--actions=setup_table",
+          ]);
 
-        // Run the incremental table in dry-run mode. 
-        // Dataform will detect the table exists and generate the dynamic procedural SQL.
-        const runResult = await runCli(
-          "run",
-          [
+          // Build the execution graph for the incremental table.
+          // Dataform will detect the table exists and generate the dynamic procedural SQL.
+          const runResult = await runCli("run", [
             projectDir,
             "--credentials",
             CREDENTIALS_PATH,
-            "--dry-run",
+            "--build-only",
             "--json",
-            "--actions=example_incremental"
-          ]
-        );
+            "--actions=example_incremental",
+          ]);
 
-        expect(runResult.exitCode).equals(0);
-        const executionGraph = JSON.parse(runResult.stdout);
-        const statement = executionGraph.actions[0].tasks[0].statement;
+          expect(runResult.exitCode).equals(0);
+          const executionGraph = JSON.parse(runResult.stdout);
+          const statement = executionGraph.actions[0].tasks[0].statement;
 
-        const expectedRunResult = {
-          projectConfig: {
-            warehouse: "bigquery",
-            defaultSchema: uniqueDataset,
-            assertionSchema: "dataform_assertions",
-            defaultDatabase: INTEGRATION_TEST_PROJECT,
-            defaultLocation: INTEGRATION_TEST_LOCATION
-          },
-          runConfig: {
-            actions: ["example_incremental"],
-            fullRefresh: false
-          },
-          actions: [
-            {
-              fileName: "definitions/example_incremental.sqlx",
-              hermeticity: "NON_HERMETIC",
-              tableType: "incremental",
-              target: {
-                database: INTEGRATION_TEST_PROJECT,
-                name: "example_incremental",
-                schema: uniqueDataset
+          const expectedExecutionGraph = {
+            projectConfig: {
+              warehouse: "bigquery",
+              defaultSchema: uniqueDataset,
+              assertionSchema: "dataform_assertions",
+              defaultDatabase: INTEGRATION_TEST_PROJECT,
+              defaultLocation: INTEGRATION_TEST_LOCATION,
+            },
+            runConfig: {
+              actions: ["example_incremental"],
+              fullRefresh: false,
+            },
+            actions: [
+              {
+                fileName: "definitions/example_incremental.sqlx",
+                hermeticity: "NON_HERMETIC",
+                tableType: "incremental",
+                target: {
+                  database: INTEGRATION_TEST_PROJECT,
+                  name: "example_incremental",
+                  schema: uniqueDataset,
+                },
+                tasks: [
+                  {
+                    statement,
+                    type: "statement",
+                  },
+                ],
+                type: "table",
               },
-              tasks: [
-                {
-                  statement,
-                  type: "statement"
-                }
-              ],
-              type: "table"
-            }
-          ],
-          jitData: {},
-          warehouseState: executionGraph.warehouseState
-        };
-        
-        expect(executionGraph).deep.equals(expectedRunResult);
-        expect(statement).to.include("CREATE OR REPLACE PROCEDURE");
-        expect(statement).to.include("Column removals are not allowed when on_schema_change = 'EXTEND'.");
-        expect(statement).to.include("ALTER TABLE");
-        expect(statement).to.include("ADD COLUMN IF NOT EXISTS");
-      } finally {
-        // Teardown the schema completely, regardless of test success or failure.
-        await runCli(
-          "run",
-          [
+            ],
+            jitData: {},
+            warehouseState: executionGraph.warehouseState,
+          };
+
+          expect(executionGraph).deep.equals(expectedExecutionGraph);
+          expect(statement).to.include("CREATE OR REPLACE PROCEDURE");
+          expect(statement).to.include(
+            "Column removals are not allowed when on_schema_change = 'EXTEND'.",
+          );
+          expect(statement).to.include("ALTER TABLE");
+          expect(statement).to.include("ADD COLUMN IF NOT EXISTS");
+        } finally {
+          // Teardown the schema completely, regardless of test success or failure.
+          await runCli("run", [
             projectDir,
             "--credentials",
             CREDENTIALS_PATH,
-            "--actions=teardown_schema"
-          ]
-        );
-      }
+            "--actions=teardown_schema",
+          ]);
+        }
+      },
+    );
+  });
+
+  suite("operations", ({ before, after }) => {
+    const dbadapter = new BigQueryDbAdapter(dfapi.credentials.read(CREDENTIALS_PATH));
+    const uniqueDataset = `${OPERATIONS_DATASET}_${makeUniqueSuffix()}`;
+
+    before("drop stale datasets", async () => {
+      await dropStaleDatasets(dbadapter, {
+        project: INTEGRATION_TEST_PROJECT,
+        location: INTEGRATION_TEST_LOCATION,
+        prefixes: [OPERATIONS_DATASET],
+      });
+    });
+
+    after("drop datasets", async () => {
+      await dropDatasets(dbadapter, INTEGRATION_TEST_PROJECT, [uniqueDataset]);
+    });
+
+    test("statements separated by --- run as a single script", { timeout: 120000 }, async () => {
+      const projectDir = tmpDirFixture.createNewTmpDir();
+      await setupProject(tmpDirFixture, projectDir, { defaultDataset: uniqueDataset });
+      // The variable declared in the first statement is only visible to the second one if
+      // both run in the same script.
+      writeDefinitionFile(
+        projectDir,
+        "multi_statement_operation.sqlx",
+        `
+config { type: "operations" }
+DECLARE min_id INT64 DEFAULT 0;
+---
+SELECT * FROM (SELECT 1 AS id) WHERE id >= min_id
+`,
+      );
+
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--actions=multi_statement_operation",
+      ]);
+
+      expect(
+        runResult.exitCode,
+        `stdout:\n${runResult.stdout}\nstderr:\n${runResult.stderr}`,
+      ).equals(0);
+      expect(runResult.stdout).to.include("Operation completed successfully");
     });
   });
 
@@ -589,7 +626,7 @@ DROP SCHEMA IF EXISTS \`\${dataform.projectConfig.defaultDatabase}.\${dataform.p
       projectDir = tmpDirFixture.createNewTmpDir();
       fs.writeFileSync(
         path.join(projectDir, "workflow_settings.yaml"),
-        `defaultProject: ${INTEGRATION_TEST_PROJECT}\ndefaultLocation: ${INTEGRATION_TEST_LOCATION}\n`
+        `defaultProject: ${INTEGRATION_TEST_PROJECT}\ndefaultLocation: ${INTEGRATION_TEST_LOCATION}\n`,
       );
     });
 
@@ -597,39 +634,248 @@ DROP SCHEMA IF EXISTS \`\${dataform.projectConfig.defaultDatabase}.\${dataform.p
       // The notice fires in the run handler before compile. Yargs validation
       // requires workflow_settings.yaml to exist, but compile can fail after that
       // — we only assert on stderr for the notice line.
-      const runResult = await runCli(
-        "run",
-        [
-          projectDir,
-          "--credentials",
-          CREDENTIALS_PATH,
-          "--timeout",
-          "30s"
-        ]
-      );
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--timeout",
+        "30s",
+      ]);
 
       expect(runResult.stderr).to.match(
-        /--timeout only bounds project compilation[\s\S]*use --execution-timeout/
+        /--timeout only bounds project compilation[\s\S]*use --execution-timeout/,
       );
     });
 
     test("--timeout on run does NOT emit notice when --execution-timeout is also set", async () => {
-      const runResult = await runCli(
-        "run",
-        [
+      const runResult = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--timeout",
+        "30s",
+        "--execution-timeout",
+        "10m",
+      ]);
+
+      expect(runResult.stderr).to.not.match(/--timeout only bounds project compilation/);
+    });
+  });
+
+  suite("json output", ({ before, beforeEach, after }) => {
+    const dbadapter = new BigQueryDbAdapter(dfapi.credentials.read(CREDENTIALS_PATH));
+    const uniqueDataset = `${JSON_OUTPUT_DATASET}_${makeUniqueSuffix()}`;
+    let projectDir: string;
+
+    before("drop stale datasets", async () => {
+      await dropStaleDatasets(dbadapter, {
+        project: INTEGRATION_TEST_PROJECT,
+        location: INTEGRATION_TEST_LOCATION,
+        prefixes: [JSON_OUTPUT_DATASET],
+      });
+    });
+
+    after("drop datasets", async () => {
+      await dropDatasets(dbadapter, INTEGRATION_TEST_PROJECT, [uniqueDataset]);
+    });
+
+    beforeEach("setup test project", async () => {
+      projectDir = tmpDirFixture.createNewTmpDir();
+      await setupProject(tmpDirFixture, projectDir, { defaultDataset: uniqueDataset });
+      writeDefinitionFile(
+        projectDir,
+        "example_table.sqlx",
+        `
+config { type: "table" }
+SELECT 1 AS id
+`,
+      );
+    });
+
+    test(
+      "run --dry-run --json outputs RunResult with compiledSql",
+      { timeout: 120000 },
+      async () => {
+        const result = await runCli("run", [
           projectDir,
           "--credentials",
           CREDENTIALS_PATH,
-          "--timeout",
-          "30s",
-          "--execution-timeout",
-          "10m"
-        ]
-      );
+          "--dry-run",
+          "--json",
+          "--actions=example_table",
+        ]);
 
-      expect(runResult.stderr).to.not.match(
-        /--timeout only bounds project compilation/
+        expect(result.exitCode, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).equals(0);
+        const parsed = JSON.parse(result.stdout);
+        expect(parsed.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+        expect(parsed.actions).to.have.lengthOf(1);
+        expect(parsed.actions[0].target).deep.equals({
+          database: INTEGRATION_TEST_PROJECT,
+          schema: uniqueDataset,
+          name: "example_table",
+        });
+        expect(parsed.actions[0].status).equals(dataform.ActionResult.ExecutionStatus.SUCCESSFUL);
+        expect(parsed.actions[0].tasks).to.have.lengthOf(1);
+        expect(parsed.actions[0].tasks[0].status).equals(
+          dataform.TaskResult.ExecutionStatus.SUCCESSFUL,
+        );
+        expect(parsed.actions[0].tasks[0].compiledSql).to.include("SELECT 1 AS id");
+      },
+    );
+
+    test("run --json executes actions and outputs RunResult", { timeout: 120000 }, async () => {
+      const result = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--json",
+        "--actions=example_table",
+      ]);
+
+      expect(result.exitCode, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).equals(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+      expect(parsed.actions).to.have.lengthOf(1);
+      expect(parsed.actions[0].target).deep.equals({
+        database: INTEGRATION_TEST_PROJECT,
+        schema: uniqueDataset,
+        name: "example_table",
+      });
+      expect(parsed.actions[0].status).equals(dataform.ActionResult.ExecutionStatus.SUCCESSFUL);
+      expect(parsed.actions[0].tasks).to.have.lengthOf(1);
+      expect(parsed.actions[0].tasks[0].status).equals(
+        dataform.TaskResult.ExecutionStatus.SUCCESSFUL,
       );
+      expect(parsed.actions[0].tasks[0].metadata?.bigquery?.jobId)
+        .to.be.a("string")
+        .and.not.equal("");
     });
-  })
+
+    test(
+      "run --build-only without --json outputs plain text summary",
+      { timeout: 120000 },
+      async () => {
+        writeDefinitionFile(
+          projectDir,
+          "new_table.sqlx",
+          `
+config { type: "table" }
+SELECT 1 AS id
+`,
+        );
+
+        // First run creates example_table as a table in BigQuery.
+        await runCli("run", [
+          projectDir,
+          "--credentials",
+          CREDENTIALS_PATH,
+          "--actions=example_table",
+        ]);
+
+        // Change example_table to a view locally so old vs new type differs.
+        writeDefinitionFile(
+          projectDir,
+          "example_table.sqlx",
+          `
+config { type: "view" }
+SELECT 1 AS id
+`,
+        );
+
+        const result = await runCli("run", [
+          projectDir,
+          "--credentials",
+          CREDENTIALS_PATH,
+          "--build-only",
+          "--actions=example_table,new_table",
+        ]);
+
+        expect(result.exitCode, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).equals(0);
+        expect(result.stdout).to.include("2 dataset(s):");
+        expect(result.stdout).to.match(
+          new RegExp(
+            `${uniqueDataset}\\.example_table.*\\[view\\] \\(type: table -> view, last modified: \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} UTC\\)`,
+          ),
+        );
+        expect(result.stdout).to.match(
+          new RegExp(`${uniqueDataset}\\.new_table.*\\[table\\] \\(does not exist\\)`),
+        );
+      },
+    );
+
+    test("run --json with no matching actions outputs empty RunResult", async () => {
+      const result = await runCli("run", [
+        projectDir,
+        "--credentials",
+        CREDENTIALS_PATH,
+        "--json",
+        "--actions=nonexistent_action",
+      ]);
+
+      expect(result.exitCode, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).equals(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+      expect(parsed.actions).deep.equals([]);
+    });
+
+    test(
+      "run --dry-run --json --run-tests keeps stdout valid JSON when tests pass",
+      { timeout: 120000 },
+      async () => {
+        writeDefinitionFile(
+          projectDir,
+          "passing_test.sqlx",
+          `
+config { type: "test", dataset: "example_table" }
+SELECT 1 AS id
+`,
+        );
+
+        const result = await runCli("run", [
+          projectDir,
+          "--credentials",
+          CREDENTIALS_PATH,
+          "--dry-run",
+          "--json",
+          "--run-tests",
+          "--actions=example_table",
+        ]);
+
+        expect(result.exitCode, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).equals(0);
+        const parsed = JSON.parse(result.stdout);
+        expect(parsed.status).equals(dataform.RunResult.ExecutionStatus.SUCCESSFUL);
+        expect(parsed.actions).to.have.lengthOf(1);
+      },
+    );
+
+    test(
+      "run --dry-run --json --run-tests writes failed test details to stderr only",
+      { timeout: 120000 },
+      async () => {
+        writeDefinitionFile(
+          projectDir,
+          "failing_test.sqlx",
+          `
+config { type: "test", dataset: "example_table" }
+SELECT 2 AS id
+`,
+        );
+
+        const result = await runCli("run", [
+          projectDir,
+          "--credentials",
+          CREDENTIALS_PATH,
+          "--dry-run",
+          "--json",
+          "--run-tests",
+          "--actions=example_table",
+        ]);
+
+        expect(result.exitCode).equals(1);
+        expect(result.stdout).equals("");
+        expect(result.stderr).to.include("failing_test: failed");
+        expect(result.stderr).to.include("Unit tests did not pass; aborting run.");
+      },
+    );
+  });
 });

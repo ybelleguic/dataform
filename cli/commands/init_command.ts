@@ -10,7 +10,7 @@ import { dataform } from "df/protos/ts";
 
 export interface IInitArgs extends IProjectDirArgs {
   defaultDatabase: string;
-  defaultLocation: string;
+  defaultLocation?: string;
   iceberg: boolean;
 }
 
@@ -19,40 +19,35 @@ const icebergOption: INamedOption<yargs.Options, IInitArgs> = {
   option: {
     describe: "Initialize the project with workflow-level Iceberg tables configuration.",
     type: "boolean",
-    default: false
-  }
+    default: false,
+  },
 };
 
 const defaultDatabaseOption: INamedOption<yargs.PositionalOptions, IInitArgs> = {
   name: ProjectConfigOptions.defaultDatabase.name,
   option: {
-    describe: "The default database to use, equivalent to Google Cloud Project ID."
+    describe: "The default database to use, equivalent to Google Cloud Project ID.",
   },
   check: (argv: yargs.Arguments<IInitArgs>) => {
     if (!argv.defaultDatabase) {
       throw new Error(
         `The ${ProjectConfigOptions.defaultDatabase.name} positional argument is ` +
-          `required. Use "dataform help init" for more info.`
+          `required. Use "dataform help init" for more info.`,
       );
     }
-  }
+  },
+  docs: { required: true },
 };
 
 const defaultLocationOption: INamedOption<yargs.PositionalOptions, IInitArgs> = {
   name: ProjectConfigOptions.defaultLocation.name,
   option: {
     describe:
-      "The default location to use. See " +
-      "https://cloud.google.com/bigquery/docs/locations for supported values."
+      "The default location to use (optional). If omitted, `defaultLocation` is not written to" +
+      " `workflow_settings.yaml` and the `location` from `.df-credentials.json` is used instead;" +
+      " if that is also unset, BigQuery chooses the location dynamically. See" +
+      " https://cloud.google.com/bigquery/docs/locations for supported values.",
   },
-  check: (argv: yargs.Arguments<IInitArgs>) => {
-    if (!argv.defaultLocation) {
-      throw new Error(
-        `The ${ProjectConfigOptions.defaultLocation.name} positional argument is ` +
-          `required. Use "dataform help init" for more info.`
-      );
-    }
-  }
 };
 
 export const initCommand: ICommand<IInitArgs> = {
@@ -60,16 +55,12 @@ export const initCommand: ICommand<IInitArgs> = {
     `init [${projectDirOption.name}] [${defaultDatabaseOption.name}]` +
     ` [${defaultLocationOption.name}]`,
   description: "Create a new dataform project.",
-  positionalOptions: [
-    projectDirOption,
-    defaultDatabaseOption,
-    defaultLocationOption
-  ],
+  positionalOptions: [projectDirOption, defaultDatabaseOption, defaultLocationOption],
   options: [icebergOption],
-  processFn: async argv => {
+  processFn: async (argv) => {
     const projectConfig: dataform.IProjectConfig = {
       defaultDatabase: argv.defaultDatabase,
-      defaultLocation: argv.defaultLocation
+      defaultLocation: argv.defaultLocation,
     };
 
     if (argv.iceberg) {
@@ -84,5 +75,5 @@ export const initCommand: ICommand<IInitArgs> = {
     const initResult = await init(argv.projectDir, projectConfig);
     printInitResult(initResult);
     return 0;
-  }
+  },
 };
